@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "qlik-table-nl2sql": {
+      "command": "node",
+      "args": ["D:/Работа/js/qlik_table/mcp-server/src/index.js"],
+      "cwd": "D:/Работа/js/qlik_table/mcp-server"
+    }
+  }
+}

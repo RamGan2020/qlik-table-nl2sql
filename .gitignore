@@ -1,0 +1,15 @@
+# зависимости
+node_modules/
+
+# секреты и локальная конфигурация
+.env
+.env.*
+!.env.example
+
+# логи и временное
+*.log
+*.tmp
+
+# OS
+Thumbs.db
+.DS_Store

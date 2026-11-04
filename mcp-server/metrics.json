@@ -1,0 +1,90 @@
+{
+  "description": "Канонические определения метрик для дашбордов застройщика. Термины (включая синонимы) трактуй строго по этим определениям, даже если вопрос сформулирован иначе.",
+  "metrics": [
+    {
+      "name": "Выручка от продаж (revenue)",
+      "synonyms": ["выручка", "продажи", "реализация", "продали на"],
+      "definition": "Сумма цен сделок (sales.price) по дате заключения сделки (sale_date).",
+      "sql": "sum(s.price) FROM sales s, агрегация по date_trunc('month', s.sale_date)",
+      "notes": "Не путать с поступлениями денег (cashflow): выручка считается по дате сделки, а деньги приходят траншами. Факт ограничивать месяцами <= текущего."
+    },
+    {
+      "name": "План продаж (sales plan)",
+      "synonyms": ["план", "запланировано", "плановый объём"],
+      "definition": "Сумма plan_revenue из sales_plan по месяцу (month — первое число месяца).",
+      "sql": "sum(sp.plan_revenue) FROM sales_plan sp",
+      "notes": "План ведётся по корпусам и каналам; сравнивать факт с планом только по одним и тем же месяцам."
+    },
+    {
+      "name": "Выполнение плана (completion)",
+      "synonyms": ["процент выполнения", "план/факт", "выполнение"],
+      "definition": "100 * факт выручки / план выручки за период.",
+      "sql": "round(100 * sum(fact_revenue) / nullif(sum(plan_revenue), 0), 1)",
+      "notes": "Факт учитывать только за месяцы <= текущего, иначе будущие месяцы с нулевым фактом занижают процент."
+    },
+    {
+      "name": "Средняя цена за м² (avg price per m²)",
+      "synonyms": ["средняя цена квадратного метра", "средняя цена", "цена за метр"],
+      "definition": "Взвешенная средняя: сумма цен сделок / сумма площадей проданных квартир.",
+      "sql": "sum(s.price) / sum(u.area) FROM sales s JOIN units u ON u.unit_id = s.unit_id",
+      "notes": "НЕ avg(s.price_per_m2): это невзвешенное среднее, считается неправильно."
+    },
+    {
+      "name": "Количество сделок (deals)",
+      "synonyms": ["число продаж", "сколько квартир продали", "сделки"],
+      "definition": "Число строк в sales за период.",
+      "sql": "count(*) FROM sales"
+    },
+    {
+      "name": "Проданная площадь (sold area)",
+      "synonyms": ["продано квадратных метров", "метраж продаж"],
+      "definition": "Сумма площадей проданных квартир.",
+      "sql": "sum(u.area) FROM sales s JOIN units u ON u.unit_id = s.unit_id"
+    },
+    {
+      "name": "Поступления денежных средств (cash-in)",
+      "synonyms": ["поступления", "пришло денег", "собрано денег", "деньги на счёте"],
+      "definition": "Фактические поступления по объектам из cashflow.fact_income; плановые — plan_income.",
+      "sql": "sum(cf.fact_income) FROM cashflow cf",
+      "notes": "Это НЕ выручка: платежи растянуты во времени (транши по ходу строительства, рассрочка). Для «сколько заработали» используй выручку."
+    },
+    {
+      "name": "Затраты на строительство (construction costs)",
+      "synonyms": ["затраты", "расходы на стройку", "потрачено на строительство"],
+      "definition": "Фактические затраты по корпусам, construction_progress.fact_cost; плановые — plan_cost.",
+      "sql": "sum(p.fact_cost) FROM construction_progress p",
+      "notes": "Только стройка; коммерческие расходы сюда не входят."
+    },
+    {
+      "name": "Чистый денежный поток (net cash flow)",
+      "synonyms": ["ЧДП", "сальдо денежного потока", "чистый поток"],
+      "definition": "Поступления минус затраты по cashflow за месяц: fact_income - fact_outcome (план: plan_income - plan_outcome).",
+      "sql": "sum(cf.fact_income) - sum(cf.fact_outcome) FROM cashflow cf"
+    },
+    {
+      "name": "Готовность корпуса (completion %)",
+      "synonyms": ["процент готовности", "ход строительства", "степень готовности"],
+      "definition": "fact_pct из construction_progress за последний доступный месяц корпуса; нарастающий итог в процентах. Плановая готовность — plan_pct.",
+      "sql": "fact_pct по месяцу = max(month) для корпуса",
+      "notes": "Проценты по месяцам НЕ суммировать — они нарастающие."
+    },
+    {
+      "name": "Доля ипотечных сделок (mortgage share)",
+      "synonyms": ["доля ипотеки", "ипотечные сделки"],
+      "definition": "Доля сделок с mortgage = true в процентах.",
+      "sql": "100.0 * count(*) FILTER (WHERE s.mortgage) / count(*) FROM sales s"
+    },
+    {
+      "name": "Средняя скидка (avg discount)",
+      "synonyms": ["скидки", "средний дисконт"],
+      "definition": "Средний discount_pct по сделкам периода.",
+      "sql": "avg(s.discount_pct) FROM sales s"
+    },
+    {
+      "name": "Остаток квартир (available units)",
+      "synonyms": ["свободные квартиры", "нереализованный остаток", "что осталось продать"],
+      "definition": "Квартиры со status = 'available'; брони (status = 'reserved') считать отдельной строкой.",
+      "sql": "count(*) FILTER (WHERE u.status = 'available') FROM units u"
+    }
+  ]
+}

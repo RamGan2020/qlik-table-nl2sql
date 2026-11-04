@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: qlik_table_postgres
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Moscow
+      PGTZ: Europe/Moscow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: qlik_table
+    ports:
+      - "5433:5432"
+    volumes:
+      - qlik_table_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qlik_table"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  qlik_table_pgdata:
