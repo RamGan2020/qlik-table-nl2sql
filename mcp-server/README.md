@@ -176,6 +176,22 @@ node test/e2e.js "Ваш вопрос на русском"
 - **Kimi Code membership** (подписка, ключ в [Kimi Code Console](https://www.kimi.com/code/console), формат `sk-kimi...`): `MOONSHOT_BASE_URL=https://api.kimi.ai/coding/v1`, модели `kimi-for-coding`, `k3`, `k3-256k`, `k3.1-pro` (по тарифу). Замечание: `kimi-for-coding` отвечает 1–2 минуты (рассуждающая модель) и требует `MOONSHOT_TEMPERATURE=1`; для более быстрых ответов используйте `k3-256k`.
 - **Moonshot Platform** (pay-as-you-go, ключ в [platform.moonshot.ai](https://platform.moonshot.ai)): `MOONSHOT_BASE_URL=https://api.moonshot.ai/v1`, актуальные имена моделей — в документации платформы.
 
+## Оценка качества (eval)
+
+`eval/questions.json` — 40 кейсов (10 простых / 15 средних / 15 сложных) с эталонным SQL. Раннер гоняет каждый вопрос через живой сервер: `nl_to_sql` → выполнение → сравнение с эталоном (позиционное, числа с допуском 1.5%, месяцы-даты приводятся к `YYYY-MM`).
+
+```bash
+npm run eval                 # весь набор, ~5-10 минут, пишет eval/report.json
+npm run eval -- --level 3    # только сложные
+npm run eval -- --only id1,id2
+npm run eval -- --min-score 90   # порог прохождения (exit code 1 при провале)
+npm run eval:check-refs      # без LLM: проверить эталоны на базе
+```
+
+Уровни результата: **L2** — результат совпал с эталоном; **L1** — SQL выполнился, но отличается от эталона (формулировка допускает варианты или ошибка); **L0** — не сгенерировался/упал. Целевой уровень для управленческого использования — стабильные ≥85–90% L2.
+
+Новый кейс: объект в `questions.json` с `id`, `level`, `question` (формулировка должна фиксировать формат: порядок колонок, округление, формат месяца) и `reference_sql`. Эталон проверяется командой `npm run eval:check-refs`. Прогоняйте eval после каждой правки промпта, модели или слоя метрик — это регрессионный тест качества.
+
 ## Безопасность
 
 - `execute_sql` принимает только одиночные `SELECT`/`WITH`/`EXPLAIN`/`VALUES`/`TABLE`: на входе — проверка (`src/guard.js`), на уровне подключения — `default_transaction_read_only=on` и `statement_timeout=15s`.

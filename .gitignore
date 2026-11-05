@@ -9,6 +9,7 @@ node_modules/
 # логи и временное
 *.log
 *.tmp
+mcp-server/eval/report*.json
 
 # OS
 Thumbs.db

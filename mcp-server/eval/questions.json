@@ -1,0 +1,242 @@
+[
+  {
+    "id": "deals-by-channel-2026",
+    "level": 1,
+    "question": "Число сделок по каналам продаж за 2026 год",
+    "reference_sql": "SELECT c.name AS channel, count(*) AS deals FROM sales s JOIN channels c ON c.channel_id = s.channel_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY c.name"
+  },
+  {
+    "id": "revenue-by-object-2026",
+    "level": 1,
+    "question": "Выручка по объектам за 2026 год в млн рублей, округлённая до одного знака",
+    "reference_sql": "SELECT o.name AS object, round(sum(s.price) / 1e6, 1) AS revenue_mln FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "avg-discount-2026",
+    "level": 1,
+    "question": "Средняя скидка по сделкам за 2026 год, в процентах, один знак после запятой",
+    "reference_sql": "SELECT round(avg(s.discount_pct), 1) AS avg_discount_pct FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01'"
+  },
+  {
+    "id": "available-by-object",
+    "level": 1,
+    "question": "Сколько свободных квартир (status = 'available') осталось по каждому объекту",
+    "reference_sql": "SELECT o.name AS object, count(*) AS available_units FROM units u JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE u.status = 'available' GROUP BY o.name"
+  },
+  {
+    "id": "total-sold",
+    "level": 1,
+    "question": "Сколько всего квартир продано за весь период",
+    "reference_sql": "SELECT count(*) AS sold_units FROM sales"
+  },
+  {
+    "id": "objects-status",
+    "level": 1,
+    "question": "Список объектов и их статусов",
+    "reference_sql": "SELECT o.name AS object, o.status FROM objects o"
+  },
+  {
+    "id": "channels-list",
+    "level": 1,
+    "question": "Какие каналы продаж есть в базе",
+    "reference_sql": "SELECT c.name AS channel FROM channels c"
+  },
+  {
+    "id": "avg-area-sold-2026",
+    "level": 1,
+    "question": "Средний метраж проданных квартир в 2026 году, один знак после запятой",
+    "reference_sql": "SELECT round(avg(u.area), 1) AS avg_area_m2 FROM sales s JOIN units u ON u.unit_id = s.unit_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01'"
+  },
+  {
+    "id": "mortgage-count-2026",
+    "level": 1,
+    "question": "Сколько сделок с ипотекой было в 2026 году",
+    "reference_sql": "SELECT count(*) AS mortgage_deals FROM sales s WHERE s.mortgage AND s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01'"
+  },
+  {
+    "id": "reserved-by-object",
+    "level": 1,
+    "question": "Сколько квартир в брони (status = 'reserved') по каждому объекту",
+    "reference_sql": "SELECT o.name AS object, count(*) AS reserved_units FROM units u JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE u.status = 'reserved' GROUP BY o.name"
+  },
+  {
+    "id": "plan-fact-objects-2026",
+    "level": 2,
+    "question": "За 2026 год по каждому объекту (включая объекты без плана и факта — там 0): план и факт выручки в млн рублей с одним знаком, колонки в порядке: объект, план, факт. Факт считай по всем месяцам 2026 года, где он есть, включая текущий",
+    "reference_sql": "WITH plan AS (SELECT b.object_id, sum(sp.plan_revenue) AS plan_rev FROM sales_plan sp JOIN buildings b ON b.building_id = sp.building_id WHERE sp.month >= DATE '2026-01-01' AND sp.month < DATE '2027-01-01' GROUP BY b.object_id), fact AS (SELECT b.object_id, sum(s.price) AS fact_rev FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY b.object_id) SELECT o.name AS object, round(coalesce(p.plan_rev, 0) / 1e6, 1) AS plan_mln, round(coalesce(f.fact_rev, 0) / 1e6, 1) AS fact_mln FROM objects o LEFT JOIN plan p ON p.object_id = o.object_id LEFT JOIN fact f ON f.object_id = o.object_id"
+  },
+  {
+    "id": "completion-objects-2026",
+    "level": 2,
+    "question": "Процент выполнения плана продаж за 2026 год по объектам, у которых план больше нуля; факт — по всем месяцам 2026 года, где он есть, включая текущий; один знак после запятой",
+    "reference_sql": "WITH plan AS (SELECT b.object_id, sum(sp.plan_revenue) AS plan_rev FROM sales_plan sp JOIN buildings b ON b.building_id = sp.building_id WHERE sp.month >= DATE '2026-01-01' AND sp.month < DATE '2027-01-01' GROUP BY b.object_id), fact AS (SELECT b.object_id, sum(s.price) AS fact_rev FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY b.object_id) SELECT o.name AS object, round(100 * coalesce(f.fact_rev, 0) / p.plan_rev, 1) AS completion_pct FROM objects o JOIN plan p ON p.object_id = o.object_id LEFT JOIN fact f ON f.object_id = o.object_id WHERE p.plan_rev > 0"
+  },
+  {
+    "id": "monthly-revenue-2026",
+    "level": 2,
+    "question": "Помесячная выручка 2026 года: месяц текстом в формате YYYY-MM, выручка в млн с одним знаком, число сделок; отсортировать по месяцу",
+    "reference_sql": "SELECT to_char(date_trunc('month', s.sale_date), 'YYYY-MM') AS month, round(sum(s.price) / 1e6, 1) AS revenue_mln, count(*) AS deals FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY date_trunc('month', s.sale_date) ORDER BY date_trunc('month', s.sale_date)"
+  },
+  {
+    "id": "cash-in-by-object",
+    "level": 2,
+    "question": "Поступления денег (cashflow) по объектам за весь период в млн рублей, один знак",
+    "reference_sql": "SELECT o.name AS object, round(sum(cf.fact_income) / 1e6, 1) AS cash_in_mln FROM cashflow cf JOIN objects o ON o.object_id = cf.object_id GROUP BY o.name"
+  },
+  {
+    "id": "readiness-latest",
+    "level": 2,
+    "question": "Текущая фактическая готовность каждого корпуса: одной строкой название объекта и корпуса через пробел, факт готовности в процентах, текущий этап работ",
+    "reference_sql": "SELECT o.name || ' ' || b.name AS building, p.fact_pct, p.stage FROM construction_progress p JOIN buildings b ON b.building_id = p.building_id JOIN objects o ON o.object_id = b.object_id WHERE p.month = (SELECT max(p2.month) FROM construction_progress p2 WHERE p2.building_id = p.building_id)"
+  },
+  {
+    "id": "readiness-lag",
+    "level": 2,
+    "question": "Корпуса, у которых в последнем доступном месяце фактическая готовность отстаёт от плановой больше чем на 5 процентных пунктов: объект и корпус одной строкой через пробел, план, факт",
+    "reference_sql": "SELECT o.name || ' ' || b.name AS building, p.plan_pct, p.fact_pct FROM construction_progress p JOIN buildings b ON b.building_id = p.building_id JOIN objects o ON o.object_id = b.object_id WHERE p.month = (SELECT max(p2.month) FROM construction_progress p2 WHERE p2.building_id = p.building_id) AND p.fact_pct < p.plan_pct - 5"
+  },
+  {
+    "id": "sold-by-rooms-2026",
+    "level": 2,
+    "question": "Сколько квартир каждой комнатности (0 = студия) продано в 2026 году, отсортировать по числу комнат",
+    "reference_sql": "SELECT u.rooms, count(*) AS deals FROM sales s JOIN units u ON u.unit_id = s.unit_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY u.rooms ORDER BY u.rooms"
+  },
+  {
+    "id": "top3-months-2026",
+    "level": 2,
+    "question": "Три самых сильных месяца 2026 года по выручке: месяц в формате YYYY-MM и выручка в млн с одним знаком",
+    "reference_sql": "SELECT to_char(m, 'YYYY-MM') AS month, round(revenue / 1e6, 1) AS revenue_mln FROM (SELECT date_trunc('month', s.sale_date) AS m, sum(s.price) AS revenue FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY date_trunc('month', s.sale_date)) t ORDER BY revenue DESC LIMIT 3"
+  },
+  {
+    "id": "plan-by-channel-2027",
+    "level": 2,
+    "question": "План продаж на 2027 год по каналам в млн рублей, один знак",
+    "reference_sql": "SELECT c.name AS channel, round(sum(sp.plan_revenue) / 1e6, 1) AS plan_mln FROM sales_plan sp JOIN channels c ON c.channel_id = sp.channel_id WHERE sp.month >= DATE '2027-01-01' AND sp.month < DATE '2028-01-01' GROUP BY c.name"
+  },
+  {
+    "id": "net-cashflow-2026",
+    "level": 2,
+    "question": "Чистый денежный поток по объектам за 2026 год в млн рублей: фактические поступления минус фактические затраты, один знак",
+    "reference_sql": "SELECT o.name AS object, round((sum(cf.fact_income) - sum(cf.fact_outcome)) / 1e6, 1) AS net_mln FROM cashflow cf JOIN objects o ON o.object_id = cf.object_id WHERE cf.month >= DATE '2026-01-01' AND cf.month < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "avg-price-weighted-2026",
+    "level": 2,
+    "question": "Взвешенная средняя цена за квадратный метр по объектам за 2026 год (сумма цен сделок, делённая на сумму площадей), округлить до целых",
+    "reference_sql": "SELECT o.name AS object, round(sum(s.price) / sum(u.area), 0) AS avg_price_m2 FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "contract-share-2026",
+    "level": 2,
+    "question": "Доля каждого типа договора в числе сделок за 2026 год, в процентах с одним знаком",
+    "reference_sql": "SELECT s.contract, round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS share_pct FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY s.contract"
+  },
+  {
+    "id": "avg-check-2026",
+    "level": 2,
+    "question": "Средний чек сделки по объектам за 2026 год в млн рублей, два знака",
+    "reference_sql": "SELECT o.name AS object, round(avg(s.price) / 1e6, 2) AS avg_check_mln FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "deals-by-floor-2026",
+    "level": 2,
+    "question": "Сколько сделок заключено на каждом этаже в 2026 году, отсортировать по этажу",
+    "reference_sql": "SELECT u.floor, count(*) AS deals FROM sales s JOIN units u ON u.unit_id = s.unit_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY u.floor ORDER BY u.floor"
+  },
+  {
+    "id": "construction-costs-2026",
+    "level": 2,
+    "question": "Затраты на строительство за 2026 год по объектам: план и факт в млн рублей с одним знаком, колонки в порядке: объект, план, факт",
+    "reference_sql": "SELECT o.name AS object, round(sum(p.plan_cost) / 1e6, 1) AS plan_mln, round(sum(p.fact_cost) / 1e6, 1) AS fact_mln FROM construction_progress p JOIN buildings b ON b.building_id = p.building_id JOIN objects o ON o.object_id = b.object_id WHERE p.month >= DATE '2026-01-01' AND p.month < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "factor-volume-price-oct",
+    "level": 3,
+    "question": "ЖК «Заречный», октябрь 2026: факторное разложение отклонения фактической выручки от плана на объёмный и ценовой эффекты в млн рублей с одним знаком, плюс колонки: плановые и фактические штуки, м² и цена за м² (цены до целых). Объёмный эффект = (факт м² - план м²) * плановая цена, ценовой эффект = (факт цена - план цена) * факт м².",
+    "reference_sql": "WITH plan AS (SELECT sum(sp.plan_units) AS plan_units, sum(sp.plan_area) AS plan_m2, sum(sp.plan_revenue) / nullif(sum(sp.plan_area), 0) AS plan_price FROM sales_plan sp JOIN buildings b ON b.building_id = sp.building_id JOIN objects o ON o.object_id = b.object_id WHERE o.name = 'ЖК «Заречный»' AND sp.month = DATE '2026-10-01'), fact AS (SELECT count(*) AS fact_units, sum(u.area) AS fact_m2, sum(s.price) / nullif(sum(u.area), 0) AS fact_price FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE o.name = 'ЖК «Заречный»' AND s.sale_date >= DATE '2026-10-01' AND s.sale_date < DATE '2026-11-01') SELECT p.plan_units, f.fact_units, round(p.plan_m2, 1) AS plan_m2, round(f.fact_m2, 1) AS fact_m2, round(p.plan_price, 0) AS plan_price, round(f.fact_price, 0) AS fact_price, round((f.fact_m2 - p.plan_m2) * p.plan_price / 1e6, 1) AS volume_effect_mln, round((f.fact_price - p.plan_price) * f.fact_m2 / 1e6, 1) AS price_effect_mln FROM plan p CROSS JOIN fact f"
+  },
+  {
+    "id": "cumulative-revenue-2026",
+    "level": 3,
+    "question": "Нарастающий итог выручки 2026 года по месяцам в млн рублей с одним знаком: месяц в формате YYYY-MM, нарастающий итог",
+    "reference_sql": "WITH m AS (SELECT date_trunc('month', s.sale_date) AS month, sum(s.price) AS revenue FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY date_trunc('month', s.sale_date)) SELECT to_char(month, 'YYYY-MM') AS month, round(sum(revenue) OVER (ORDER BY month) / 1e6, 1) AS cumulative_mln FROM m ORDER BY month"
+  },
+  {
+    "id": "channel-revenue-share-2026",
+    "level": 3,
+    "question": "Доля каждого канала в выручке 2026 года в процентах с одним знаком",
+    "reference_sql": "SELECT c.name AS channel, round(100.0 * sum(s.price) / sum(sum(s.price)) OVER (), 1) AS share_pct FROM sales s JOIN channels c ON c.channel_id = s.channel_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY c.name"
+  },
+  {
+    "id": "channel-plan-fact-oct-2026",
+    "level": 3,
+    "question": "ЖК «Заречный», октябрь 2026: по каждому каналу план и факт выручки в млн с одним знаком и процент выполнения с одним знаком; колонки в порядке: канал, план, факт, процент",
+    "reference_sql": "WITH plan AS (SELECT sp.channel_id, sum(sp.plan_revenue) AS plan_rev FROM sales_plan sp JOIN buildings b ON b.building_id = sp.building_id JOIN objects o ON o.object_id = b.object_id WHERE o.name = 'ЖК «Заречный»' AND sp.month = DATE '2026-10-01' GROUP BY sp.channel_id), fact AS (SELECT s.channel_id, sum(s.price) AS fact_rev FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE o.name = 'ЖК «Заречный»' AND s.sale_date >= DATE '2026-10-01' AND s.sale_date < DATE '2026-11-01' GROUP BY s.channel_id) SELECT c.name AS channel, round(coalesce(p.plan_rev, 0) / 1e6, 1) AS plan_mln, round(coalesce(f.fact_rev, 0) / 1e6, 1) AS fact_mln, round(100 * coalesce(f.fact_rev, 0) / nullif(p.plan_rev, 0), 1) AS completion_pct FROM channels c LEFT JOIN plan p ON p.channel_id = c.channel_id LEFT JOIN fact f ON f.channel_id = c.channel_id"
+  },
+  {
+    "id": "avg-area-per-deal-2026",
+    "level": 3,
+    "question": "Средняя площадь одной проданной квартиры по объектам за 2026 год (сумма площадей делённая на число сделок), один знак, колонки: объект, средняя площадь",
+    "reference_sql": "SELECT o.name AS object, round(sum(u.area) / count(*), 1) AS avg_area_m2 FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "unsold-base-price",
+    "level": 3,
+    "question": "Средняя стартовая цена за м² среди свободных квартир по объектам: простое среднее по квартирам (avg(base_price)), округлить до целых",
+    "reference_sql": "SELECT o.name AS object, round(avg(u.base_price), 0) AS avg_base_price FROM units u JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE u.status = 'available' GROUP BY o.name"
+  },
+  {
+    "id": "quarterly-revenue-2026",
+    "level": 3,
+    "question": "Выручка по кварталам 2026 года: номер квартала и выручка в млн с одним знаком",
+    "reference_sql": "SELECT extract(quarter FROM s.sale_date)::int AS quarter, round(sum(s.price) / 1e6, 1) AS revenue_mln FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY extract(quarter FROM s.sale_date)"
+  },
+  {
+    "id": "revenue-by-building-2026",
+    "level": 3,
+    "question": "Выручка за 2026 год по корпусам: объект, корпус, выручка в млн с одним знаком",
+    "reference_sql": "SELECT o.name AS object, b.name AS building, round(sum(s.price) / 1e6, 1) AS revenue_mln FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name, b.name"
+  },
+  {
+    "id": "cash-in-vs-plan-2026",
+    "level": 3,
+    "question": "Поступления денег против плана за 2026 год по объектам: план за весь 2026 год (включая декабрь), факт по всем месяцам, где он есть; план, факт и отклонение (факт минус план) в млн рублей с одним знаком, колонки: объект, план, факт, отклонение",
+    "reference_sql": "SELECT o.name AS object, round(sum(cf.plan_income) / 1e6, 1) AS plan_mln, round(sum(cf.fact_income) / 1e6, 1) AS fact_mln, round((sum(cf.fact_income) - sum(cf.plan_income)) / 1e6, 1) AS deviation_mln FROM cashflow cf JOIN objects o ON o.object_id = cf.object_id WHERE cf.month >= DATE '2026-01-01' AND cf.month < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "deals-per-month-2026",
+    "level": 3,
+    "question": "Сколько сделок заключалось в каждом месяце 2026 года: месяц в формате YYYY-MM и число сделок, по порядку месяцев",
+    "reference_sql": "SELECT to_char(date_trunc('month', s.sale_date), 'YYYY-MM') AS month, count(*) AS deals FROM sales s WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY date_trunc('month', s.sale_date) ORDER BY date_trunc('month', s.sale_date)"
+  },
+  {
+    "id": "price-dynamics-2026",
+    "level": 3,
+    "question": "Динамика взвешенной средней цены за м² по месяцам 2026 года (сумма цен делённая на сумму площадей): месяц в формате YYYY-MM, цена до целых, по порядку месяцев",
+    "reference_sql": "SELECT to_char(date_trunc('month', s.sale_date), 'YYYY-MM') AS month, round(sum(s.price) / sum(u.area), 0) AS avg_price_m2 FROM sales s JOIN units u ON u.unit_id = s.unit_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY date_trunc('month', s.sale_date) ORDER BY date_trunc('month', s.sale_date)"
+  },
+  {
+    "id": "mortgage-share-by-object-2026",
+    "level": 3,
+    "question": "Доля ипотечных сделок по объектам за 2026 год в процентах с одним знаком",
+    "reference_sql": "SELECT o.name AS object, round(100.0 * count(*) FILTER (WHERE s.mortgage) / count(*), 1) AS mortgage_pct FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "discount-by-channel-2026",
+    "level": 3,
+    "question": "Средняя скидка по каналам за 2026 год в процентах с одним знаком",
+    "reference_sql": "SELECT c.name AS channel, round(avg(s.discount_pct), 1) AS avg_discount_pct FROM sales s JOIN channels c ON c.channel_id = s.channel_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY c.name"
+  },
+  {
+    "id": "studio-revenue-2026",
+    "level": 3,
+    "question": "Сколько выручки дали студии (квартиры с нулём комнат) в 2026 году, млн рублей с одним знаком",
+    "reference_sql": "SELECT round(sum(s.price) / 1e6, 1) AS studio_revenue_mln FROM sales s JOIN units u ON u.unit_id = s.unit_id WHERE u.rooms = 0 AND s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01'"
+  },
+  {
+    "id": "sold-share-by-object-2026",
+    "level": 3,
+    "question": "Доля каждого объекта в числе сделок 2026 года в процентах с одним знаком",
+    "reference_sql": "SELECT o.name AS object, round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS share_pct FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  }
+]

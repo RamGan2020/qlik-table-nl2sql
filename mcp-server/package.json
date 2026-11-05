@@ -6,7 +6,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js",
+    "eval": "node eval/run.js",
+    "eval:check-refs": "node eval/run.js --check-refs"
   },
   "engines": {
     "node": ">=18"
