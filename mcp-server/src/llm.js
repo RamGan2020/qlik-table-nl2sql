@@ -1,8 +1,13 @@
 // Клиент Moonshot/Kimi (OpenAI-совместимый chat completions) + устойчивый разбор JSON-ответа.
 
-function buildSystemPrompt(schemaText, semanticBlock = '') {
+import { traceStep } from './trace.js';
+
+function buildSystemPrompt(schemaText, semanticBlock = '', examplesBlock = '') {
   const semanticSection = semanticBlock
     ? `\n${semanticBlock}\n`
+    : '';
+  const examplesSection = examplesBlock
+    ? `\n${examplesBlock}\n`
     : '';
   return `Ты переводишь вопросы на русском языке в SQL-запросы для PostgreSQL 16. База — финансовая отчётность девелопера (застройщика жилой недвижимости).
 
@@ -10,7 +15,7 @@ function buildSystemPrompt(schemaText, semanticBlock = '') {
 
 Схема БД (физическая, из information_schema):
 ${schemaText}
-${semanticSection}
+${semanticSection}${examplesSection}
 Ключевые правила (дополняют семантическое ядро):
 - «Факт vs план» продаж: факт — мера revenue из модели sales по месяцу date_trunc('month', sale_date), план — мера planned_revenue из модели sales_plan по month. При сравнении факта с планом за период, включающий текущий месяц, факт ограничивай ЗАКРЫТЫМИ месяцами (< date_trunc('month', CURRENT_DATE)), чтобы не сравнивать неполный месяц с полным планом. Вопросы про факт за период без сравнения с планом считай по всем доступным месяцам, включая текущий.
 - Денежные суммы — рубли; для ответа в миллионах делить на 1e6 и округлять round(x, 1), если вопрос не задаёт другой формат.
@@ -53,6 +58,7 @@ export function parseLlmJson(text) {
     try {
       const parsed = JSON.parse(candidate.slice(start, end + 1));
       if (parsed && typeof parsed.sql === 'string' && parsed.sql.trim()) {
+        traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'путь: JSON.parse целиком');
         return { sql: parsed.sql.trim(), explanation: String(parsed.explanation ?? '') };
       }
     } catch {
@@ -60,6 +66,7 @@ export function parseLlmJson(text) {
     }
     const sqlMatch = candidate.slice(start, end + 1).match(/"sql"\s*:\s*"((?:\\[\s\S]|[\s\S])*?)"\s*[,}]/);
     if (sqlMatch) {
+      traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'путь: регулярное выделение полей sql/explanation');
       const explMatch = candidate.slice(start, end + 1).match(/"explanation"\s*:\s*"((?:\\[\s\S]|[\s\S])*?)"\s*[,}]/);
       return {
         sql: unescapeJsonString(sqlMatch[1]).trim(),
@@ -70,44 +77,63 @@ export function parseLlmJson(text) {
 
   // 2) последняя надежда: в тексте просто лежит SQL
   if (/\bselect\b/i.test(candidate)) {
+    traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'путь: в ответе голый SQL без JSON, explanation оставлен пустым');
     return { sql: candidate, explanation: '' };
   }
+  traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'не удалось извлечь JSON с полем "sql" — будет ошибка');
   throw new Error('Не удалось разобрать ответ модели: ожидался JSON с полем "sql".');
 }
 
-export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, semanticBlock = '', correction = null }) {
+export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, semanticBlock = '', examplesBlock = '', correction = null }) {
+  const startedAt = Date.now();
+  const system = buildSystemPrompt(schemaText, semanticBlock, examplesBlock);
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: question },
+    ...(correction
+      ? [{
+          role: 'user',
+          content:
+            `Твой предыдущий ответ отклонён валидацией. Проблемы: ${correction.problems.join('; ')}. ` +
+            `Исправь SQL: сущности бери из семантического слоя и физической схемы, ` +
+            `джойны выполняй только по связям из реестра связей семантического ядра. ` +
+            `Предыдущий (неверный) SQL: ${correction.previousSql}. Ответь тем же форматом JSON.`,
+        }]
+      : []),
+  ];
+
+  traceStep(
+    correction ? 'LLM ЗАПРОС (исправляющий повтор)' : 'LLM ЗАПРОС',
+    `POST ${baseUrl}/chat/completions\nmodel: ${model}\ntemperature: ${temperature}\n\n` +
+      messages.map((m, i) => `== message[${i}] ${m.role} ==\n${m.content}`).join('\n\n'),
+  );
+
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-  temperature,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(schemaText, semanticBlock) },
-        { role: 'user', content: question },
-        ...(correction
-          ? [{
-              role: 'user',
-              content:
-                `Твой предыдущий ответ отклонён валидацией. Проблемы: ${correction.problems.join('; ')}. ` +
-                `Исправь SQL, замени несуществующие сущности на реальные из семантического слоя и физической схемы. ` +
-                `Предыдущий (неверный) SQL: ${correction.previousSql}. Ответь тем же форматом JSON.`,
-            }]
-          : []),
-      ],
-    }),
+    body: JSON.stringify({ model, temperature, messages }),
   });
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    traceStep('LLM ОШИБКА', `HTTP ${res.status}: ${body.slice(0, 300)}`);
     throw new Error(`Moonshot API вернул ${res.status}: ${body.slice(0, 300)}`);
   }
 
   const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
+  const message = data.choices?.[0]?.message ?? {};
+  const content = message.content;
   if (!content) throw new Error('Пустой ответ Moonshot API.');
+  if (message.reasoning_content) {
+    traceStep('LLM РАССУЖДЕНИЕ (reasoning_content)', String(message.reasoning_content));
+  }
+  traceStep(
+    'LLM СЫРОЙ ОТВЕТ',
+    `${content}\n\nHTTP ${res.status} · ${Date.now() - startedAt} мс` +
+      (data.usage ? `\nusage: ${JSON.stringify(data.usage)}` : ''),
+  );
   return parseLlmJson(content);
 }

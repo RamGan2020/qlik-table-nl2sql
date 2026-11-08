@@ -14,16 +14,31 @@ import { loadSchemaColumns, loadSchemaText } from './schema.js';
 import { validateSql } from './validate.js';
 import { createSemanticLoader, renderSemanticBlock } from './semantic.js';
 import { callNlToSql } from './llm.js';
+import { createCache } from './cache.js';
+import { initTrace, traceStep } from './trace.js';
+import { createExamplesLoader, renderExamplesBlock } from './examples.js';
 
+// .env грузим ДО любых потребителей окружения: initTrace и createCache ниже
+// читают NL2SQL_TRACE/NL2SQL_CACHE уже на этапе инициализации модуля.
 dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '../.env'), quiet: true });
 dotenv.config({ quiet: true }); // fallback: .env из cwd, не переопределяет уже заданные переменные
+
+initTrace();
+
+const cache = createCache(
+  process.env.NL2SQL_CACHE && process.env.NL2SQL_CACHE !== '0'
+    ? process.env.NL2SQL_CACHE
+    : process.env.NL2SQL_CACHE === '0'
+      ? ''
+      : join(dirname(fileURLToPath(import.meta.url)), '../nl2sql-cache.json'),
+);
 
 const config = {
   databaseUrl: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5433/qlik_table',
   apiKey: process.env.MOONSHOT_API_KEY ?? '',
   baseUrl: (process.env.MOONSHOT_BASE_URL ?? 'https://api.moonshot.ai/v1').replace(/\/+$/, ''),
   model: process.env.MOONSHOT_MODEL ?? 'kimi-k3',
-  temperature: Number(process.env.MOONSHOT_TEMPERATURE ?? 1),
+  temperature: Number(process.env.MOONSHOT_TEMPERATURE ?? 1), // coding-модели допускают только 1; детерминированность даёт кэш (cache.js)
   maxRows: Number.parseInt(process.env.MAX_ROWS ?? '1000', 10),
 };
 
@@ -47,6 +62,11 @@ await refreshSchema();
 const getSemantic = createSemanticLoader(
   join(dirname(fileURLToPath(import.meta.url)), 'models'),
   join(dirname(fileURLToPath(import.meta.url)), 'relationships.yaml'),
+);
+
+// few-shot примеры для промпта: вопросы и эталонные SQL из eval/questions.json
+const getExamples = createExamplesLoader(
+  join(dirname(fileURLToPath(import.meta.url)), '../eval/questions.json'),
 );
 
 const server = new McpServer({ name: 'qlik-table-nl2sql', version: '1.0.0' });
@@ -76,24 +96,41 @@ server.registerTool(
     if (!config.apiKey) {
       return err('Не задан MOONSHOT_API_KEY. Укажите ключ в переменной окружения или в .env.');
     }
+    const t0 = Date.now();
+    traceStep('NL_TO_SQL: ВХОД', `question: ${question}\nmodel: ${config.model} · temperature: ${config.temperature}`);
     try {
-      const semanticBlock = renderSemanticBlock(getSemantic());
-      let result = await callNlToSql({
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model,
-        temperature: config.temperature,
-        schemaText,
-        semanticBlock,
-        question,
-      });
+      const semantic = getSemantic();
+      const semanticBlock = renderSemanticBlock(semantic);
+      traceStep('СЕМАНТИЧЕСКИЙ БЛОК (подмешивается в системный промпт)', semanticBlock);
+      const examplesBlock = process.env.NL2SQL_EXAMPLES === '0' ? '' : renderExamplesBlock(getExamples());
+      traceStep('ПРИМЕРЫ few-shot (eval/questions.json)', examplesBlock || '(выключены: NL2SQL_EXAMPLES=0)');
+      const cacheKey = cache.key([question, schemaText, semanticBlock, examplesBlock, config.model, config.baseUrl]);
+      let fromCache = false;
+      let result = cache.get(cacheKey);
+      if (result) {
+        fromCache = true;
+        traceStep('КЭШ: попадание', `ключ: ${cacheKey}\nSQL и пояснение взяты из кэша, LLM не вызывался`);
+      } else {
+        result = await callNlToSql({
+          apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
+          model: config.model,
+          temperature: config.temperature,
+          schemaText,
+          semanticBlock,
+          examplesBlock,
+          question,
+        });
+      }
       normalizeReadOnly(result.sql); // модель не должна генерировать ничего кроме SELECT
+      traceStep('GUARD (read-only)', 'ok — одиночный SELECT/WITH, без изменения данных');
 
       // пост-валидация: все таблицы и колонки должны существовать
       const warnings = [];
       if (schemaCols) {
-        const problems = validateSql(result.sql, schemaCols);
+        const problems = validateSql(result.sql, schemaCols, semantic.relationships);
         if (problems.length) {
+          traceStep('ПОСТ-ВАЛИДАЦИЯ: найдены проблемы', problems);
           const fixed = await callNlToSql({
             apiKey: config.apiKey,
             baseUrl: config.baseUrl,
@@ -101,19 +138,31 @@ server.registerTool(
             temperature: config.temperature,
             schemaText,
             semanticBlock,
+            examplesBlock,
             question,
             correction: { problems, previousSql: result.sql },
           });
-          const remaining = validateSql(fixed.sql, schemaCols);
+          const remaining = validateSql(fixed.sql, schemaCols, semantic.relationships);
           if (remaining.length === 0) {
+            traceStep('ПОСТ-ВАЛИДАЦИЯ: исправлено повтором', 'SQL после исправляющего вызова валиден');
             result = fixed;
           } else {
+            traceStep('ПОСТ-ВАЛИДАЦИЯ: повтор не помог', remaining);
             warnings.push(...remaining);
           }
+        } else {
+          traceStep('ПОСТ-ВАЛИДАЦИЯ', 'проблем нет — исправляющий повтор не требуется');
         }
       }
-      return ok({ sql: result.sql, explanation: result.explanation, ...(warnings.length ? { warnings } : {}) });
+      if (!fromCache && warnings.length === 0) {
+        cache.set(cacheKey, { sql: result.sql, explanation: result.explanation });
+        traceStep('КЭШ: сохранено', `ключ: ${cacheKey}\nпоследующие одинаковые вопросы получат этот же SQL без вызова LLM`);
+      }
+      const payload = { sql: result.sql, explanation: result.explanation, ...(warnings.length ? { warnings } : {}) };
+      traceStep('NL_TO_SQL: ИТОГ (возврат из инструмента)', `${JSON.stringify(payload, null, 2)}\n\nвсего ${Date.now() - t0} мс`);
+      return ok(payload);
     } catch (e) {
+      traceStep('NL_TO_SQL: ОШИБКА', e.message);
       return err(`Ошибка генерации SQL: ${e.message}`);
     }
   },
