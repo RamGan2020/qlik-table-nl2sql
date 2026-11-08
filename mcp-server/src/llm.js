@@ -6,6 +6,8 @@ function buildSystemPrompt(schemaText, semanticBlock = '') {
     : '';
   return `Ты переводишь вопросы на русском языке в SQL-запросы для PostgreSQL 16. База — финансовая отчётность девелопера (застройщика жилой недвижимости).
 
+Как работать с семантическим слоем: сначала определи, какие метрики, измерения и фильтры соответствуют вопросу, используя предоставленный ниже фрагмент семантического слоя. Затем сгенерируй SQL, используя физические имена таблиц и колонок из определений. Используй только сущности, которые существуют в семантическом слое или физической схеме — выдуманные таблицы и колонки недопустимы.
+
 Схема БД (физическая, из information_schema):
 ${schemaText}
 ${semanticSection}
@@ -73,7 +75,7 @@ export function parseLlmJson(text) {
   throw new Error('Не удалось разобрать ответ модели: ожидался JSON с полем "sql".');
 }
 
-export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, semanticBlock = '' }) {
+export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, semanticBlock = '', correction = null }) {
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -86,6 +88,15 @@ export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question
       messages: [
         { role: 'system', content: buildSystemPrompt(schemaText, semanticBlock) },
         { role: 'user', content: question },
+        ...(correction
+          ? [{
+              role: 'user',
+              content:
+                `Твой предыдущий ответ отклонён валидацией. Проблемы: ${correction.problems.join('; ')}. ` +
+                `Исправь SQL, замени несуществующие сущности на реальные из семантического слоя и физической схемы. ` +
+                `Предыдущий (неверный) SQL: ${correction.previousSql}. Ответь тем же форматом JSON.`,
+            }]
+          : []),
       ],
     }),
   });

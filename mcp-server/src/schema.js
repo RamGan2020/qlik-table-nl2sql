@@ -21,7 +21,6 @@ export async function loadSchemaText(pool) {
       ORDER BY table_name, ordinal_position`);
 
     if (!rows.length) return FALLBACK_SCHEMA;
-
     const tables = new Map();
     for (const r of rows) {
       if (!tables.has(r.table_name)) tables.set(r.table_name, []);
@@ -46,5 +45,27 @@ export async function loadSchemaText(pool) {
     return out.trimEnd();
   } catch {
     return FALLBACK_SCHEMA;
+  }
+}
+
+// Структурный вариант схемы для пост-валидации SQL:
+// Map<table_lower, Set<column_lower>> из information_schema.
+// null при недоступности БД — валидация тогда пропускается.
+export async function loadSchemaColumns(pool) {
+  try {
+    const { rows } = await pool.query(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'`);
+    if (!rows.length) return null;
+    const map = new Map();
+    for (const r of rows) {
+      const t = r.table_name.toLowerCase();
+      if (!map.has(t)) map.set(t, new Set());
+      map.get(t).add(r.column_name.toLowerCase());
+    }
+    return map;
+  } catch {
+    return null;
   }
 }

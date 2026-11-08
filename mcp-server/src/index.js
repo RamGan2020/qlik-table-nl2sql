@@ -10,7 +10,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 import { normalizeReadOnly } from './guard.js';
-import { loadSchemaText } from './schema.js';
+import { loadSchemaColumns, loadSchemaText } from './schema.js';
+import { validateSql } from './validate.js';
 import { createSemanticLoader, renderSemanticBlock } from './semantic.js';
 import { callNlToSql } from './llm.js';
 
@@ -35,8 +36,10 @@ const pool = new pg.Pool({
 pool.on('error', () => {}); // не падать на обрывах соединений
 
 let schemaText = '';
+let schemaCols = null; // Map<table, Set<col>> для пост-валидации сгенерированного SQL
 async function refreshSchema() {
   schemaText = await loadSchemaText(pool);
+  schemaCols = await loadSchemaColumns(pool);
 }
 await refreshSchema();
 
@@ -74,17 +77,42 @@ server.registerTool(
       return err('Не задан MOONSHOT_API_KEY. Укажите ключ в переменной окружения или в .env.');
     }
     try {
-      const { sql, explanation } = await callNlToSql({
+      const semanticBlock = renderSemanticBlock(getSemantic());
+      let result = await callNlToSql({
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
         temperature: config.temperature,
         schemaText,
-        semanticBlock: renderSemanticBlock(getSemantic()),
+        semanticBlock,
         question,
       });
-      normalizeReadOnly(sql); // модель не должна генерировать ничего кроме SELECT
-      return ok({ sql, explanation });
+      normalizeReadOnly(result.sql); // модель не должна генерировать ничего кроме SELECT
+
+      // пост-валидация: все таблицы и колонки должны существовать
+      const warnings = [];
+      if (schemaCols) {
+        const problems = validateSql(result.sql, schemaCols);
+        if (problems.length) {
+          const fixed = await callNlToSql({
+            apiKey: config.apiKey,
+            baseUrl: config.baseUrl,
+            model: config.model,
+            temperature: config.temperature,
+            schemaText,
+            semanticBlock,
+            question,
+            correction: { problems, previousSql: result.sql },
+          });
+          const remaining = validateSql(fixed.sql, schemaCols);
+          if (remaining.length === 0) {
+            result = fixed;
+          } else {
+            warnings.push(...remaining);
+          }
+        }
+      }
+      return ok({ sql: result.sql, explanation: result.explanation, ...(warnings.length ? { warnings } : {}) });
     } catch (e) {
       return err(`Ошибка генерации SQL: ${e.message}`);
     }
