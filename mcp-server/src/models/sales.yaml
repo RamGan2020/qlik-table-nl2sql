@@ -14,10 +14,56 @@ dimensions:
   - name: channel_id
     label: "Идентификатор канала"
     type: integer
+  - name: channel
+    label: "Канал продаж"
+    type: string
+    sql: "channels.name"
+    requires_join: ["channels"]
+    synonyms: ["канал", "источник продаж"]
   - name: sale_date
     label: "Дата сделки"
     type: date
     synonyms: ["дата продажи", "дата договора"]
+  - name: month
+    label: "Месяц сделки"
+    type: string
+    sql: "to_char(date_trunc('month', sales.sale_date), 'YYYY-MM')"
+    synonyms: ["месяц", "помесячно"]
+  - name: quarter
+    label: "Квартал"
+    type: integer
+    sql: "extract(quarter FROM sales.sale_date)"
+    synonyms: ["квартал", "Q"]
+  - name: rooms
+    label: "Количество комнат"
+    type: integer
+    sql: "units.rooms"
+    requires_join: ["units"]
+    synonyms: ["комнатность", "студия/1к/2к/3к"]
+  - name: floor
+    label: "Этаж"
+    type: integer
+    sql: "units.floor"
+    requires_join: ["units"]
+    synonyms: ["этаж квартиры"]
+  - name: unit
+    label: "Квартира (номер)"
+    type: string
+    sql: "units.unit_number"
+    requires_join: ["units"]
+    synonyms: ["лот", "номер квартиры"]
+  - name: building
+    label: "Корпус"
+    type: string
+    sql: "buildings.name"
+    requires_join: ["units", "buildings"]
+    synonyms: ["дом", "корпус"]
+  - name: object
+    label: "Объект (ЖК)"
+    type: string
+    sql: "objects.name"
+    requires_join: ["units", "buildings", "objects"]
+    synonyms: ["жилой комплекс", "ЖК", "объект", "проект"]
   - name: mortgage
     label: "Ипотека"
     type: boolean
@@ -26,12 +72,12 @@ dimensions:
     label: "Тип договора"
     type: string
     synonyms: ["ДДУ", "уступка", "рассрочка"]
-    # ДДУ / Уступка права / Рассрочка
+    domain: ["ДДУ", "Уступка права", "Рассрочка"]
 measures:
   - name: revenue
     label: "Выручка от продаж"
     type: simple
-    sql: "SUM(price)"
+    sql: "SUM(sales.price)"
     synonyms: ["выручка", "продажи", "реализация", "продали на"]
     notes: "Считается по дате сделки (sale_date), а не по поступлениям денег. Не путать с cash-in из cashflow."
   - name: deals
@@ -42,24 +88,54 @@ measures:
   - name: sold_area
     label: "Проданная площадь, кв. м"
     type: simple
-    sql: "SUM(u.area)"
+    sql: "SUM(units.area)"
     requires_join: ["units"]
     synonyms: ["продано квадратных метров", "метраж продаж"]
   - name: avg_price_per_m2
     label: "Средняя цена за м² (взвешенная)"
     type: ratio
-    numerator_sql: "SUM(s.price)"
-    denominator_sql: "SUM(u.area)"
+    numerator_sql: "SUM(sales.price)"
+    denominator_sql: "SUM(units.area)"
     requires_join: ["units"]
     synonyms: ["средняя цена квадратного метра", "средняя цена", "цена за метр"]
     notes: "Взвешенная: сумма цен / сумма площадей. НЕ avg(price_per_m2) — это неверно."
   - name: mortgage_share_pct
     label: "Доля ипотечных сделок, %"
     type: simple
-    sql: "100.0 * COUNT(*) FILTER (WHERE mortgage) / NULLIF(COUNT(*), 0)"
+    sql: "100.0 * COUNT(*) FILTER (WHERE sales.mortgage) / NULLIF(COUNT(*), 0)"
     synonyms: ["доля ипотеки", "ипотечные сделки"]
   - name: avg_discount_pct
     label: "Средняя скидка, %"
     type: simple
-    sql: "AVG(discount_pct)"
+    sql: "AVG(sales.discount_pct)"
     synonyms: ["скидки", "средний дисконт"]
+  - name: avg_check
+    label: "Средний чек сделки"
+    type: simple
+    sql: "AVG(sales.price)"
+    synonyms: ["средний чек", "средняя цена сделки"]
+  - name: avg_sold_area_m2
+    label: "Средняя площадь проданной квартиры, кв. м"
+    type: ratio
+    numerator_sql: "SUM(units.area)"
+    denominator_sql: "COUNT(*)"
+    requires_join: ["units"]
+    synonyms: ["средний метраж сделки", "средняя площадь продаж"]
+  - name: deals_share_pct
+    label: "Доля в числе сделок, %"
+    type: simple
+    sql: "100.0 * COUNT(*) / SUM(COUNT(*)) OVER ()"
+    synonyms: ["доля сделок", "структура сделок"]
+    notes: "Оконная мера: работает только с group_by (иначе одиночное значение 100%)."
+  - name: revenue_share_pct
+    label: "Доля в выручке, %"
+    type: simple
+    sql: "100.0 * SUM(sales.price) / SUM(SUM(sales.price)) OVER ()"
+    synonyms: ["доля в выручке", "структура выручки"]
+    notes: "Оконная мера: работает только с group_by."
+  - name: revenue_cumulative
+    label: "Нарастающий итог выручки"
+    type: simple
+    sql: "SUM(SUM(sales.price)) OVER (ORDER BY to_char(date_trunc('month', sales.sale_date), 'YYYY-MM'))"
+    synonyms: ["нарастающий итог", "кумулятивная выручка"]
+    notes: "Оконная мера: работает только с группировкой по month (порядок нарастания — по месяцам)."

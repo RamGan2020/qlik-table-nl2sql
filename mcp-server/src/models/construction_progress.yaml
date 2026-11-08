@@ -11,6 +11,24 @@ dimensions:
   - name: building_id
     label: "Идентификатор корпуса"
     type: integer
+  - name: building
+    label: "Корпус"
+    type: string
+    sql: "buildings.name"
+    requires_join: ["buildings"]
+    synonyms: ["дом", "корпус"]
+  - name: building_full
+    label: "Объект и корпус одной строкой"
+    type: string
+    sql: "objects.name || ' ' || buildings.name"
+    requires_join: ["buildings", "objects"]
+    synonyms: ["объект и корпус", "название корпуса с объектом", "ЖК и корпус"]
+  - name: object
+    label: "Объект (ЖК)"
+    type: string
+    sql: "objects.name"
+    requires_join: ["buildings", "objects"]
+    synonyms: ["жилой комплекс", "ЖК", "объект", "проект"]
   - name: month
     label: "Месяц среза"
     type: date
@@ -26,27 +44,27 @@ measures:
   - name: construction_costs
     label: "Затраты на строительство (факт)"
     type: simple
-    sql: "SUM(fact_cost)"
+    sql: "SUM(construction_progress.fact_cost)"
     synonyms: ["затраты", "расходы на стройку", "потрачено на строительство"]
     notes: "Только стройка; коммерческие расходы сюда не входят."
   - name: planned_construction_costs
     label: "Затраты на строительство (план)"
     type: simple
-    sql: "SUM(plan_cost)"
+    sql: "SUM(construction_progress.plan_cost)"
     synonyms: ["плановые затраты на стройку"]
   - name: readiness_pct
     label: "Готовность корпуса, %"
     type: latest_snapshot
-    sql: "fact_pct"
-    snapshot_key: "building_id"
-    order_by: "month DESC"
+    sql: "construction_progress.fact_pct"
+    snapshot_key: "construction_progress.building_id"
+    order_by: "construction_progress.month DESC"
     synonyms: ["процент готовности", "ход строительства", "степень готовности"]
     notes: "fact_pct — нарастающий итог. Проценты по месяцам НЕ суммировать и НЕ усреднять. Брать значение за последний доступный месяц корпуса."
   - name: planned_readiness_pct
     label: "Плановая готовность корпуса, %"
     type: latest_snapshot
-    sql: "plan_pct"
-    snapshot_key: "building_id"
-    order_by: "month DESC"
+    sql: "construction_progress.plan_pct"
+    snapshot_key: "construction_progress.building_id"
+    order_by: "construction_progress.month DESC"
     synonyms: ["план готовности"]
     notes: "plan_pct — тоже нарастающий итог; брать последнее значение."

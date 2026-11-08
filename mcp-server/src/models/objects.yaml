@@ -23,7 +23,7 @@ dimensions:
     label: "Статус объекта"
     type: string
     synonyms: ["строится/сдан", "состояние объекта"]
-    # значения: 'строится', 'сдан'
+    domain: ["строится", "сдан"]
   - name: start_date
     label: "Дата начала строительства"
     type: date

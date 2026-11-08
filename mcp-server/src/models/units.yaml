@@ -11,6 +11,18 @@ dimensions:
   - name: building_id
     label: "Идентификатор корпуса"
     type: integer
+  - name: building
+    label: "Корпус"
+    type: string
+    sql: "buildings.name"
+    requires_join: ["buildings"]
+    synonyms: ["дом", "корпус"]
+  - name: object
+    label: "Объект (ЖК)"
+    type: string
+    sql: "objects.name"
+    requires_join: ["buildings", "objects"]
+    synonyms: ["жилой комплекс", "ЖК", "объект", "проект"]
   - name: unit_number
     label: "Номер квартиры"
     type: string
@@ -31,26 +43,31 @@ dimensions:
     label: "Статус квартиры"
     type: string
     synonyms: ["available/sold/reserved", "свободна/продана/бронь"]
-    # значения: 'available', 'sold', 'reserved'
+    domain: ["available", "sold", "reserved"]
 measures:
   - name: available_units
     label: "Остаток квартир (свободные)"
     type: simple
-    sql: "COUNT(*) FILTER (WHERE status = 'available')"
+    sql: "COUNT(*) FILTER (WHERE units.status = 'available')"
     synonyms: ["свободные квартиры", "нереализованный остаток", "что осталось продать"]
     notes: "Брони (status = 'reserved') сюда не входят — их надо считать отдельной мерой."
   - name: reserved_units
     label: "Квартиры в брони"
     type: simple
-    sql: "COUNT(*) FILTER (WHERE status = 'reserved')"
+    sql: "COUNT(*) FILTER (WHERE units.status = 'reserved')"
     synonyms: ["забронировано", "брони"]
   - name: sold_units
     label: "Проданные квартиры"
     type: simple
-    sql: "COUNT(*) FILTER (WHERE status = 'sold')"
+    sql: "COUNT(*) FILTER (WHERE units.status = 'sold')"
     synonyms: ["продано квартир (по статусу)"]
     notes: "Это статус в справочнике units, а не число сделок в sales. Для числа сделок используй меру deals из модели sales."
   - name: total_area
     label: "Общая площадь квартир, кв. м"
     type: simple
-    sql: "SUM(area)"
+    sql: "SUM(units.area)"
+  - name: avg_base_price
+    label: "Средняя стартовая цена за м²"
+    type: simple
+    sql: "AVG(units.base_price)"
+    synonyms: ["средний base_price", "средняя стартовая цена квартиры"]

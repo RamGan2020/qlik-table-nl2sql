@@ -81,7 +81,8 @@ export function renderSemanticBlock(semantic) {
     if (m.dimensions?.length) {
       const dims = m.dimensions.map((d) => {
         const syn = d.synonyms?.length ? ` [синонимы: ${d.synonyms.join(', ')}]` : '';
-        return `${d.name} (${d.type}) — ${d.label}${syn}`;
+        const domain = d.domain?.length ? ` {значения: ${d.domain.map((v) => JSON.stringify(v)).join(', ')}}` : '';
+        return `${d.name} (${d.type}) — ${d.label}${syn}${domain}`;
       });
       L.push(`Измерения: ${dims.join('; ')}.`);
     }

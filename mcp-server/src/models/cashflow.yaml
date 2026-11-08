@@ -11,6 +11,12 @@ dimensions:
   - name: object_id
     label: "Идентификатор ЖК"
     type: integer
+  - name: object
+    label: "Объект (ЖК)"
+    type: string
+    sql: "objects.name"
+    requires_join: ["objects"]
+    synonyms: ["жилой комплекс", "ЖК", "объект", "проект"]
   - name: month
     label: "Месяц"
     type: date
@@ -19,36 +25,41 @@ measures:
   - name: cash_in
     label: "Поступления денежных средств (факт)"
     type: simple
-    sql: "SUM(fact_income)"
+    sql: "SUM(cashflow.fact_income)"
     synonyms: ["поступления", "пришло денег", "собрано денег", "деньги на счёте"]
     notes: "Это НЕ выручка: платежи растянуты во времени (транши, рассрочка). Для «сколько заработали» используй revenue из sales."
   - name: planned_cash_in
     label: "Поступления денежных средств (план)"
     type: simple
-    sql: "SUM(plan_income)"
+    sql: "SUM(cashflow.plan_income)"
   - name: cash_out
     label: "Затраты (факт, из cashflow)"
     type: simple
-    sql: "SUM(fact_outcome)"
+    sql: "SUM(cashflow.fact_outcome)"
     synonyms: ["платежи", "отток"]
     notes: "fact_outcome в cashflow = fact_cost из construction_progress * (1.0–1.15), т.е. с наценкой коммерческих расходов. Для «чистых» строительных затрат используй construction_costs из construction_progress."
   - name: planned_cash_out
     label: "Затраты (план, из cashflow)"
     type: simple
-    sql: "SUM(plan_outcome)"
+    sql: "SUM(cashflow.plan_outcome)"
   - name: net_cash_flow
     label: "Чистый денежный поток (факт)"
     type: derived
-    sql: "SUM(fact_income) - SUM(fact_outcome)"
+    sql: "SUM(cashflow.fact_income) - SUM(cashflow.fact_outcome)"
     synonyms: ["ЧДП", "сальдо денежного потока", "чистый поток"]
   - name: planned_net_cash_flow
     label: "Чистый денежный поток (план)"
     type: derived
-    sql: "SUM(plan_income) - SUM(plan_outcome)"
+    sql: "SUM(cashflow.plan_income) - SUM(cashflow.plan_outcome)"
+  - name: cash_in_deviation
+    label: "Отклонение поступлений (факт минус план)"
+    type: derived
+    sql: "SUM(cashflow.fact_income) - SUM(cashflow.plan_income)"
+    synonyms: ["отклонение поступлений", "факт минус план поступлений"]
   - name: plan_completion_pct
     label: "Выполнение плана, %"
     type: ratio
-    numerator_sql: "SUM(fact_income)"
-    denominator_sql: "SUM(plan_income)"
+    numerator_sql: "SUM(cashflow.fact_income)"
+    denominator_sql: "SUM(cashflow.plan_income)"
     synonyms: ["процент выполнения", "план/факт", "выполнение"]
     notes: "Факт учитывать только за месяцы <= текущего, иначе будущие месяцы с NULL-фактом занижают процент."

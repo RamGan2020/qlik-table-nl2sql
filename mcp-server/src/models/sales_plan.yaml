@@ -11,9 +11,27 @@ dimensions:
   - name: building_id
     label: "Идентификатор корпуса"
     type: integer
+  - name: building
+    label: "Корпус"
+    type: string
+    sql: "buildings.name"
+    requires_join: ["buildings"]
+    synonyms: ["дом", "корпус"]
+  - name: object
+    label: "Объект (ЖК)"
+    type: string
+    sql: "objects.name"
+    requires_join: ["buildings", "objects"]
+    synonyms: ["жилой комплекс", "ЖК", "объект", "проект"]
   - name: channel_id
     label: "Идентификатор канала"
     type: integer
+  - name: channel
+    label: "Канал продаж"
+    type: string
+    sql: "channels.name"
+    requires_join: ["channels"]
+    synonyms: ["канал", "источник продаж"]
   - name: month
     label: "Месяц плана"
     type: date
@@ -23,16 +41,16 @@ measures:
   - name: planned_revenue
     label: "Плановая выручка"
     type: simple
-    sql: "SUM(plan_revenue)"
+    sql: "SUM(sales_plan.plan_revenue)"
     synonyms: ["план", "запланировано", "плановый объём"]
     notes: "Сравнивать с фактом только по одним и тем же месяцам."
   - name: planned_units
     label: "Плановое количество лотов"
     type: simple
-    sql: "SUM(plan_units)"
+    sql: "SUM(sales_plan.plan_units)"
     synonyms: ["план по количеству", "плановые лоты"]
   - name: planned_area
     label: "Плановая площадь, кв. м"
     type: simple
-    sql: "SUM(plan_area)"
+    sql: "SUM(sales_plan.plan_area)"
     synonyms: ["план по метражу"]

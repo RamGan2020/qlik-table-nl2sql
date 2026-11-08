@@ -31,4 +31,4 @@ measures:
   - name: buildings_count
     label: "Количество корпусов"
     type: simple
-    sql: "COUNT(DISTINCT building_id)"
+    sql: "COUNT(DISTINCT buildings.building_id)"

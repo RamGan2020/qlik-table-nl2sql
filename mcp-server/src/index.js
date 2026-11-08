@@ -1,4 +1,5 @@
-// MCP-сервер: вопрос на естественном языке -> SQL (PostgreSQL), read-only выполнение.
+// MCP-сервер: вопрос на естественном языке -> план (IR) -> детерминированный
+// SQL (PostgreSQL) через компилятор на polyglot; read-only выполнение.
 // Транспорт: stdio. Конфигурация: переменные окружения (см. .env.example).
 
 import { fileURLToPath } from 'node:url';
@@ -11,9 +12,10 @@ import { z } from 'zod';
 
 import { normalizeReadOnly } from './guard.js';
 import { loadSchemaColumns, loadSchemaText } from './schema.js';
-import { validateSql } from './validate.js';
 import { createSemanticLoader, renderSemanticBlock } from './semantic.js';
 import { callNlToSql } from './llm.js';
+import { parsePlan } from './ir.js';
+import { compilePlan } from './compiler.js';
 import { createCache } from './cache.js';
 import { initTrace, traceStep } from './trace.js';
 import { createExamplesLoader, renderExamplesBlock } from './examples.js';
@@ -85,7 +87,9 @@ server.registerTool(
     title: 'Текст -> SQL',
     description:
       'Принимает вопрос на русском языке и возвращает готовый SQL-запрос (PostgreSQL) ' +
-      'по базе финансовой отчётности застройщика. Запрос не выполняется — только генерируется.',
+      'по базе финансовой отчётности застройщика. SQL строится детерминированно: ' +
+      'модель генерирует план (IR), компилятор превращает его в SQL. ' +
+      'Запрос не выполняется — только генерируется.',
     inputSchema: {
       question: z
         .string()
@@ -105,13 +109,19 @@ server.registerTool(
       const examplesBlock = process.env.NL2SQL_EXAMPLES === '0' ? '' : renderExamplesBlock(getExamples());
       traceStep('ПРИМЕРЫ few-shot (eval/questions.json)', examplesBlock || '(выключены: NL2SQL_EXAMPLES=0)');
       const cacheKey = cache.key([question, schemaText, semanticBlock, examplesBlock, config.model, config.baseUrl]);
+
       let fromCache = false;
       let result = cache.get(cacheKey);
       if (result) {
         fromCache = true;
-        traceStep('КЭШ: попадание', `ключ: ${cacheKey}\nSQL и пояснение взяты из кэша, LLM не вызывался`);
+        traceStep('КЭШ: попадание', `ключ: ${cacheKey}\nSQL, план и пояснение взяты из кэша, LLM не вызывался`);
       } else {
-        result = await callNlToSql({
+        const materialize = (rawPlan, explanation) => {
+          const plan = parsePlan(rawPlan);
+          const sql = compilePlan(plan, semantic);
+          return { sql, plan, explanation };
+        };
+        const raw = await callNlToSql({
           apiKey: config.apiKey,
           baseUrl: config.baseUrl,
           model: config.model,
@@ -121,16 +131,15 @@ server.registerTool(
           examplesBlock,
           question,
         });
-      }
-      normalizeReadOnly(result.sql); // модель не должна генерировать ничего кроме SELECT
-      traceStep('GUARD (read-only)', 'ok — одиночный SELECT/WITH, без изменения данных');
-
-      // пост-валидация: все таблицы и колонки должны существовать
-      const warnings = [];
-      if (schemaCols) {
-        const problems = validateSql(result.sql, schemaCols, semantic.relationships);
-        if (problems.length) {
-          traceStep('ПОСТ-ВАЛИДАЦИЯ: найдены проблемы', problems);
+        if (raw.unanswerable) {
+          traceStep('ПЛАН: вопрос не поддержан', raw.unanswerable);
+          return err(`Вопрос не поддержан плановым интерфейсом: ${raw.unanswerable}`);
+        }
+        try {
+          result = materialize(raw.plan, raw.explanation);
+          traceStep('ПЛАН: скомпилирован', JSON.stringify(result.plan, null, 2));
+        } catch (e) {
+          traceStep('ПЛАН: отклонён валидацией/компилятором', e.message);
           const fixed = await callNlToSql({
             apiKey: config.apiKey,
             baseUrl: config.baseUrl,
@@ -140,25 +149,27 @@ server.registerTool(
             semanticBlock,
             examplesBlock,
             question,
-            correction: { problems, previousSql: result.sql },
+            correction: { problems: [e.message], previousPlan: raw.plan },
           });
-          const remaining = validateSql(fixed.sql, schemaCols, semantic.relationships);
-          if (remaining.length === 0) {
-            traceStep('ПОСТ-ВАЛИДАЦИЯ: исправлено повтором', 'SQL после исправляющего вызова валиден');
-            result = fixed;
-          } else {
-            traceStep('ПОСТ-ВАЛИДАЦИЯ: повтор не помог', remaining);
-            warnings.push(...remaining);
+          if (fixed.unanswerable) {
+            return err(`Вопрос не поддержан плановым интерфейсом: ${fixed.unanswerable}`);
           }
-        } else {
-          traceStep('ПОСТ-ВАЛИДАЦИЯ', 'проблем нет — исправляющий повтор не требуется');
+          try {
+            result = materialize(fixed.plan, fixed.explanation);
+            traceStep('ПЛАН: исправлен повтором', JSON.stringify(result.plan, null, 2));
+          } catch (e2) {
+            traceStep('ПЛАН: повтор не помог', e2.message);
+            return err(`План не скомпилировался: ${e2.message}`);
+          }
         }
       }
-      if (!fromCache && warnings.length === 0) {
-        cache.set(cacheKey, { sql: result.sql, explanation: result.explanation });
+      normalizeReadOnly(result.sql); // компилятор порождает SELECT, guard — последний рубеж
+      traceStep('GUARD (read-only)', 'ok — одиночный SELECT/WITH, без изменения данных');
+      if (!fromCache) {
+        cache.set(cacheKey, { sql: result.sql, plan: result.plan, explanation: result.explanation });
         traceStep('КЭШ: сохранено', `ключ: ${cacheKey}\nпоследующие одинаковые вопросы получат этот же SQL без вызова LLM`);
       }
-      const payload = { sql: result.sql, explanation: result.explanation, ...(warnings.length ? { warnings } : {}) };
+      const payload = { sql: result.sql, plan: result.plan, explanation: result.explanation };
       traceStep('NL_TO_SQL: ИТОГ (возврат из инструмента)', `${JSON.stringify(payload, null, 2)}\n\nвсего ${Date.now() - t0} мс`);
       return ok(payload);
     } catch (e) {
