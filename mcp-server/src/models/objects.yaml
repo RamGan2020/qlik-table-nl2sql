@@ -1,0 +1,34 @@
+name: objects
+label: "Жилой комплекс"
+description: "Жилой комплекс (ЖК) — верхний уровень организационной иерархии застройщика."
+physical:
+  table: objects
+  primary_key: object_id
+dimensions:
+  - name: object_id
+    label: "Идентификатор ЖК"
+    type: integer
+  - name: name
+    label: "Название ЖК"
+    type: string
+    synonyms: ["жилой комплекс", "объект", "проект", "ЖК"]
+  - name: city
+    label: "Город"
+    type: string
+    synonyms: ["локация", "город застройки"]
+  - name: address
+    label: "Адрес"
+    type: string
+  - name: status
+    label: "Статус объекта"
+    type: string
+    synonyms: ["строится/сдан", "состояние объекта"]
+    # значения: 'строится', 'сдан'
+  - name: start_date
+    label: "Дата начала строительства"
+    type: date
+  - name: end_date
+    label: "Плановая дата сдачи"
+    type: date
+    synonyms: ["срок сдачи", "плановая сдача"]
+measures: []

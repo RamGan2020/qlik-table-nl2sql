@@ -1,0 +1,26 @@
+name: dim_date
+label: "Календарь"
+description: "Календарь 2023–2028 для корректной агрегации по периодам."
+physical:
+  table: dim_date
+  primary_key: date_id
+dimensions:
+  - name: date_id
+    label: "Дата"
+    type: date
+  - name: year
+    label: "Год"
+    type: integer
+    synonyms: ["год"]
+  - name: month
+    label: "Месяц (номер)"
+    type: integer
+  - name: month_name
+    label: "Название месяца"
+    type: string
+    synonyms: ["месяц"]
+  - name: quarter
+    label: "Квартал"
+    type: integer
+    synonyms: ["квартал", "Q"]
+measures: []

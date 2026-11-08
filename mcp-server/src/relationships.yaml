@@ -1,0 +1,53 @@
+relationships:
+  - from: buildings.object_id
+    to: objects.object_id
+    type: many_to_one
+    label: "Корпус принадлежит ЖК"
+  - from: units.building_id
+    to: buildings.building_id
+    type: many_to_one
+    label: "Квартира находится в корпусе"
+  - from: sales.unit_id
+    to: units.unit_id
+    type: many_to_one
+    label: "Сделка относится к квартире"
+  - from: sales.channel_id
+    to: channels.channel_id
+    type: many_to_one
+    label: "Сделка совершена по каналу"
+  - from: sales_plan.building_id
+    to: buildings.building_id
+    type: many_to_one
+    label: "Строка плана относится к корпусу"
+  - from: sales_plan.channel_id
+    to: channels.channel_id
+    type: many_to_one
+    label: "Строка плана относится к каналу"
+  - from: construction_progress.building_id
+    to: buildings.building_id
+    type: many_to_one
+    label: "Срез хода строительства относится к корпусу"
+  - from: cashflow.object_id
+    to: objects.object_id
+    type: many_to_one
+    label: "Денежный поток относится к ЖК"
+  - from: dim_date.date_id
+    to: sales.sale_date
+    type: one_to_many
+    role: calendar
+    label: "Календарь по дате сделки"
+  - from: dim_date.date_id
+    to: sales_plan.month
+    type: one_to_many
+    role: calendar
+    label: "Календарь по месяцу плана"
+  - from: dim_date.date_id
+    to: construction_progress.month
+    type: one_to_many
+    role: calendar
+    label: "Календарь по месяцу прогресса"
+  - from: dim_date.date_id
+    to: cashflow.month
+    type: one_to_many
+    role: calendar
+    label: "Календарь по месяцу cashflow"

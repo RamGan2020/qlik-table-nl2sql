@@ -1,0 +1,17 @@
+name: channels
+label: "Канал продаж"
+description: "Справочник каналов продаж."
+physical:
+  table: channels
+  primary_key: channel_id
+dimensions:
+  - name: channel_id
+    label: "Идентификатор канала"
+    type: integer
+  - name: name
+    label: "Название канала"
+    type: string
+    synonyms: ["канал", "источник продаж", "способ продажи"]
+    # Сайт застройщика / Офис продаж / Агентства недвижимости /
+    # Ипотечный брокер / Рекламные площадки
+measures: []

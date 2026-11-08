@@ -1,0 +1,65 @@
+name: sales
+label: "Продажи (факт)"
+description: "Транзакционный факт продаж: одна строка = одна сделка."
+physical:
+  table: sales
+  primary_key: sale_id
+dimensions:
+  - name: sale_id
+    label: "Идентификатор сделки"
+    type: integer
+  - name: unit_id
+    label: "Идентификатор квартиры"
+    type: integer
+  - name: channel_id
+    label: "Идентификатор канала"
+    type: integer
+  - name: sale_date
+    label: "Дата сделки"
+    type: date
+    synonyms: ["дата продажи", "дата договора"]
+  - name: mortgage
+    label: "Ипотека"
+    type: boolean
+    synonyms: ["ипотечная сделка", "в ипотеку"]
+  - name: contract
+    label: "Тип договора"
+    type: string
+    synonyms: ["ДДУ", "уступка", "рассрочка"]
+    # ДДУ / Уступка права / Рассрочка
+measures:
+  - name: revenue
+    label: "Выручка от продаж"
+    type: simple
+    sql: "SUM(price)"
+    synonyms: ["выручка", "продажи", "реализация", "продали на"]
+    notes: "Считается по дате сделки (sale_date), а не по поступлениям денег. Не путать с cash-in из cashflow."
+  - name: deals
+    label: "Количество сделок"
+    type: simple
+    sql: "COUNT(*)"
+    synonyms: ["число продаж", "сколько квартир продали", "сделки"]
+  - name: sold_area
+    label: "Проданная площадь, кв. м"
+    type: simple
+    sql: "SUM(u.area)"
+    requires_join: ["units"]
+    synonyms: ["продано квадратных метров", "метраж продаж"]
+  - name: avg_price_per_m2
+    label: "Средняя цена за м² (взвешенная)"
+    type: ratio
+    numerator_sql: "SUM(s.price)"
+    denominator_sql: "SUM(u.area)"
+    requires_join: ["units"]
+    synonyms: ["средняя цена квадратного метра", "средняя цена", "цена за метр"]
+    notes: "Взвешенная: сумма цен / сумма площадей. НЕ avg(price_per_m2) — это неверно."
+  - name: mortgage_share_pct
+    label: "Доля ипотечных сделок, %"
+    type: simple
+    sql: "100.0 * COUNT(*) FILTER (WHERE mortgage) / NULLIF(COUNT(*), 0)"
+    synonyms: ["доля ипотеки", "ипотечные сделки"]
+  - name: avg_discount_pct
+    label: "Средняя скидка, %"
+    type: simple
+    sql: "AVG(discount_pct)"
+    synonyms: ["скидки", "средний дисконт"]

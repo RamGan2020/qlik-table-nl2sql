@@ -1,0 +1,38 @@
+name: sales_plan
+label: "План продаж"
+description: "Помесячный план продаж по корпусам и каналам."
+physical:
+  table: sales_plan
+  primary_key: plan_id
+dimensions:
+  - name: plan_id
+    label: "Идентификатор строки плана"
+    type: integer
+  - name: building_id
+    label: "Идентификатор корпуса"
+    type: integer
+  - name: channel_id
+    label: "Идентификатор канала"
+    type: integer
+  - name: month
+    label: "Месяц плана"
+    type: date
+    synonyms: ["месяц", "период плана"]
+    # первое число месяца
+measures:
+  - name: planned_revenue
+    label: "Плановая выручка"
+    type: simple
+    sql: "SUM(plan_revenue)"
+    synonyms: ["план", "запланировано", "плановый объём"]
+    notes: "Сравнивать с фактом только по одним и тем же месяцам."
+  - name: planned_units
+    label: "Плановое количество лотов"
+    type: simple
+    sql: "SUM(plan_units)"
+    synonyms: ["план по количеству", "плановые лоты"]
+  - name: planned_area
+    label: "Плановая площадь, кв. м"
+    type: simple
+    sql: "SUM(plan_area)"
+    synonyms: ["план по метражу"]

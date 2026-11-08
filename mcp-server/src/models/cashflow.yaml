@@ -1,0 +1,54 @@
+name: cashflow
+label: "Денежный поток"
+description: "Помесячное движение денежных средств по объектам: поступления и затраты, план/факт."
+physical:
+  table: cashflow
+  primary_key: cashflow_id
+dimensions:
+  - name: cashflow_id
+    label: "Идентификатор записи"
+    type: integer
+  - name: object_id
+    label: "Идентификатор ЖК"
+    type: integer
+  - name: month
+    label: "Месяц"
+    type: date
+    synonyms: ["период", "месяц движения"]
+measures:
+  - name: cash_in
+    label: "Поступления денежных средств (факт)"
+    type: simple
+    sql: "SUM(fact_income)"
+    synonyms: ["поступления", "пришло денег", "собрано денег", "деньги на счёте"]
+    notes: "Это НЕ выручка: платежи растянуты во времени (транши, рассрочка). Для «сколько заработали» используй revenue из sales."
+  - name: planned_cash_in
+    label: "Поступления денежных средств (план)"
+    type: simple
+    sql: "SUM(plan_income)"
+  - name: cash_out
+    label: "Затраты (факт, из cashflow)"
+    type: simple
+    sql: "SUM(fact_outcome)"
+    synonyms: ["платежи", "отток"]
+    notes: "fact_outcome в cashflow = fact_cost из construction_progress * (1.0–1.15), т.е. с наценкой коммерческих расходов. Для «чистых» строительных затрат используй construction_costs из construction_progress."
+  - name: planned_cash_out
+    label: "Затраты (план, из cashflow)"
+    type: simple
+    sql: "SUM(plan_outcome)"
+  - name: net_cash_flow
+    label: "Чистый денежный поток (факт)"
+    type: derived
+    sql: "SUM(fact_income) - SUM(fact_outcome)"
+    synonyms: ["ЧДП", "сальдо денежного потока", "чистый поток"]
+  - name: planned_net_cash_flow
+    label: "Чистый денежный поток (план)"
+    type: derived
+    sql: "SUM(plan_income) - SUM(plan_outcome)"
+  - name: plan_completion_pct
+    label: "Выполнение плана, %"
+    type: ratio
+    numerator_sql: "SUM(fact_income)"
+    denominator_sql: "SUM(plan_income)"
+    synonyms: ["процент выполнения", "план/факт", "выполнение"]
+    notes: "Факт учитывать только за месяцы <= текущего, иначе будущие месяцы с NULL-фактом занижают процент."

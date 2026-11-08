@@ -1,0 +1,52 @@
+name: construction_progress
+label: "Ход строительства"
+description: "Помесячные срезы готовности и затрат по корпусам."
+physical:
+  table: construction_progress
+  primary_key: progress_id
+dimensions:
+  - name: progress_id
+    label: "Идентификатор записи"
+    type: integer
+  - name: building_id
+    label: "Идентификатор корпуса"
+    type: integer
+  - name: month
+    label: "Месяц среза"
+    type: date
+    synonyms: ["отчетная дата", "месяц"]
+  - name: stage
+    label: "Этап строительства"
+    type: string
+    synonyms: ["стадия", "этап работ"]
+    # Подготовка территории / Фундамент / Возведение коробки /
+    # Кровля и фасад / Внутренние инженерные сети /
+    # Отделка мест общего пользования / Благоустройство
+measures:
+  - name: construction_costs
+    label: "Затраты на строительство (факт)"
+    type: simple
+    sql: "SUM(fact_cost)"
+    synonyms: ["затраты", "расходы на стройку", "потрачено на строительство"]
+    notes: "Только стройка; коммерческие расходы сюда не входят."
+  - name: planned_construction_costs
+    label: "Затраты на строительство (план)"
+    type: simple
+    sql: "SUM(plan_cost)"
+    synonyms: ["плановые затраты на стройку"]
+  - name: readiness_pct
+    label: "Готовность корпуса, %"
+    type: latest_snapshot
+    sql: "fact_pct"
+    snapshot_key: "building_id"
+    order_by: "month DESC"
+    synonyms: ["процент готовности", "ход строительства", "степень готовности"]
+    notes: "fact_pct — нарастающий итог. Проценты по месяцам НЕ суммировать и НЕ усреднять. Брать значение за последний доступный месяц корпуса."
+  - name: planned_readiness_pct
+    label: "Плановая готовность корпуса, %"
+    type: latest_snapshot
+    sql: "plan_pct"
+    snapshot_key: "building_id"
+    order_by: "month DESC"
+    synonyms: ["план готовности"]
+    notes: "plan_pct — тоже нарастающий итог; брать последнее значение."

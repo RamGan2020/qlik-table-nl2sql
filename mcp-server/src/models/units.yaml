@@ -1,0 +1,56 @@
+name: units
+label: "Квартира"
+description: "Квартира (лот) — единица продажи."
+physical:
+  table: units
+  primary_key: unit_id
+dimensions:
+  - name: unit_id
+    label: "Идентификатор квартиры"
+    type: integer
+  - name: building_id
+    label: "Идентификатор корпуса"
+    type: integer
+  - name: unit_number
+    label: "Номер квартиры"
+    type: string
+    synonyms: ["лот", "квартира"]
+  - name: rooms
+    label: "Количество комнат"
+    type: integer
+    synonyms: ["комнатность", "студия/1к/2к/3к"]
+    # 0 = студия
+  - name: area
+    label: "Площадь, кв. м"
+    type: decimal
+    synonyms: ["площадь", "метраж"]
+  - name: floor
+    label: "Этаж"
+    type: integer
+  - name: status
+    label: "Статус квартиры"
+    type: string
+    synonyms: ["available/sold/reserved", "свободна/продана/бронь"]
+    # значения: 'available', 'sold', 'reserved'
+measures:
+  - name: available_units
+    label: "Остаток квартир (свободные)"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE status = 'available')"
+    synonyms: ["свободные квартиры", "нереализованный остаток", "что осталось продать"]
+    notes: "Брони (status = 'reserved') сюда не входят — их надо считать отдельной мерой."
+  - name: reserved_units
+    label: "Квартиры в брони"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE status = 'reserved')"
+    synonyms: ["забронировано", "брони"]
+  - name: sold_units
+    label: "Проданные квартиры"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE status = 'sold')"
+    synonyms: ["продано квартир (по статусу)"]
+    notes: "Это статус в справочнике units, а не число сделок в sales. Для числа сделок используй меру deals из модели sales."
+  - name: total_area
+    label: "Общая площадь квартир, кв. м"
+    type: simple
+    sql: "SUM(area)"

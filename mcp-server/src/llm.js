@@ -1,26 +1,19 @@
 // Клиент Moonshot/Kimi (OpenAI-совместимый chat completions) + устойчивый разбор JSON-ответа.
 
-function buildSystemPrompt(schemaText, metricsBlock = '') {
-  const metricsSection = metricsBlock
-    ? `\nСлой метрик — канонические определения. Термины (включая синонимы) трактуй строго по этим определениям:\n${metricsBlock}\n`
+function buildSystemPrompt(schemaText, semanticBlock = '') {
+  const semanticSection = semanticBlock
+    ? `\n${semanticBlock}\n`
     : '';
   return `Ты переводишь вопросы на русском языке в SQL-запросы для PostgreSQL 16. База — финансовая отчётность девелопера (застройщика жилой недвижимости).
 
-Схема БД:
+Схема БД (физическая, из information_schema):
 ${schemaText}
-${metricsSection}
-Ключевые связи и правила:
-- objects (ЖК) 1--* buildings (корпуса) 1--* units (квартиры).
-- sales ссылается на units (проданная квартира) и channels (канал сделки).
-- sales_plan — план: помесячно по корпусам И каналам (month — первое число месяца).
-- construction_progress — помесячно по корпусам: stage (этап работ), plan_pct/fact_pct (нарастающие проценты готовности), plan_cost/fact_cost (затраты за месяц).
-- cashflow — помесячно по объектам: plan_income/fact_income (поступления от продаж), plan_outcome/fact_outcome (затраты на стройку).
-- «Факт vs план» продаж: факт — sum(sales.price) по date_trunc('month', sale_date), план — sum(sales_plan.plan_revenue) по month. При сравнении факта с планом за период, включающий текущий месяц, факт ограничивай ЗАКРЫТЫМИ месяцами (< date_trunc('month', CURRENT_DATE)), чтобы не сравнивать неполный месяц с полным планом. Вопросы про факт за период без сравнения с планом считай по всем доступным месяцам, включая текущий.
-- Денежные суммы — рубли; миллионы — делить на 1e6, округлять round(x, 1).
-- Площади — units.area (м²); цены за м² — sales.price_per_m2, units.base_price.
+${semanticSection}
+Ключевые правила (дополняют семантическое ядро):
+- «Факт vs план» продаж: факт — мера revenue из модели sales по месяцу date_trunc('month', sale_date), план — мера planned_revenue из модели sales_plan по month. При сравнении факта с планом за период, включающий текущий месяц, факт ограничивай ЗАКРЫТЫМИ месяцами (< date_trunc('month', CURRENT_DATE)), чтобы не сравнивать неполный месяц с полным планом. Вопросы про факт за период без сравнения с планом считай по всем доступным месяцам, включая текущий.
+- Денежные суммы — рубли; для ответа в миллионах делить на 1e6 и округлять round(x, 1), если вопрос не задаёт другой формат.
 - Имена объектов и каналов — точно как в данных, в одинарных кавычках: 'ЖК «Заречный»'.
-- Статусы: objects.status — 'строится' / 'сдан'; units.status — 'available' / 'sold' / 'reserved'.
-- contract в sales — 'ДДУ' / 'Уступка права' / 'Рассрочка'; mortgage — boolean.
+- Домены значений: objects.status — 'строится' / 'сдан'; units.status — 'available' / 'sold' / 'reserved'; sales.contract — 'ДДУ' / 'Уступка права' / 'Рассрочка'.
 
 Жёсткие правила:
 1. Только одиночный SELECT (допускается WITH). Запрещены INSERT/UPDATE/DELETE/DDL и любые изменения данных.
@@ -80,7 +73,7 @@ export function parseLlmJson(text) {
   throw new Error('Не удалось разобрать ответ модели: ожидался JSON с полем "sql".');
 }
 
-export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, metricsBlock = '' }) {
+export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, semanticBlock = '' }) {
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -91,7 +84,7 @@ export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question
       model,
   temperature,
       messages: [
-        { role: 'system', content: buildSystemPrompt(schemaText, metricsBlock) },
+        { role: 'system', content: buildSystemPrompt(schemaText, semanticBlock) },
         { role: 'user', content: question },
       ],
     }),

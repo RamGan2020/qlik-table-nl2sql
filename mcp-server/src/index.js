@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import { normalizeReadOnly } from './guard.js';
 import { loadSchemaText } from './schema.js';
-import { createMetricsLoader, renderMetricsBlock } from './metrics.js';
+import { createSemanticLoader, renderSemanticBlock } from './semantic.js';
 import { callNlToSql } from './llm.js';
 
 dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '../.env'), quiet: true });
@@ -40,9 +40,10 @@ async function refreshSchema() {
 }
 await refreshSchema();
 
-// слой метрик: автоперечитывание при изменении файла (по mtime)
-const getMetrics = createMetricsLoader(
-  join(dirname(fileURLToPath(import.meta.url)), '../metrics.json'),
+// семантическое ядро: автоперечитывание при изменении YAML-моделей (по отпечатку mtime)
+const getSemantic = createSemanticLoader(
+  join(dirname(fileURLToPath(import.meta.url)), 'models'),
+  join(dirname(fileURLToPath(import.meta.url)), 'relationships.yaml'),
 );
 
 const server = new McpServer({ name: 'qlik-table-nl2sql', version: '1.0.0' });
@@ -79,7 +80,7 @@ server.registerTool(
         model: config.model,
         temperature: config.temperature,
         schemaText,
-        metricsBlock: renderMetricsBlock(getMetrics()),
+        semanticBlock: renderSemanticBlock(getSemantic()),
         question,
       });
       normalizeReadOnly(sql); // модель не должна генерировать ничего кроме SELECT

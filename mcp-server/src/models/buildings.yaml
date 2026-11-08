@@ -1,0 +1,34 @@
+name: buildings
+label: "Корпус"
+description: "Корпус (дом) в составе ЖК."
+physical:
+  table: buildings
+  primary_key: building_id
+dimensions:
+  - name: building_id
+    label: "Идентификатор корпуса"
+    type: integer
+  - name: object_id
+    label: "Идентификатор ЖК"
+    type: integer
+  - name: name
+    label: "Название корпуса"
+    type: string
+    synonyms: ["корпус", "дом", "строение"]
+  - name: floors
+    label: "Этажность"
+    type: integer
+    synonyms: ["этажей", "высота"]
+  - name: sections
+    label: "Количество секций"
+    type: integer
+    synonyms: ["секции", "подъезды"]
+  - name: plan_finish
+    label: "Плановая дата завершения"
+    type: date
+    synonyms: ["срок сдачи корпуса"]
+measures:
+  - name: buildings_count
+    label: "Количество корпусов"
+    type: simple
+    sql: "COUNT(DISTINCT building_id)"

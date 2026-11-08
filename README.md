@@ -8,7 +8,7 @@ An MCP server that turns Russian natural-language questions into SQL against a r
 
 - **Вопрос → SQL → результат.** Пользователь пишет по-русски («Продажи по каналам за 2026 год»), получает SQL и данные. Поддерживается режим факторного анализа («почему недобор плана? разложи на факторы»).
 - **Read-only по умолчанию:** только `SELECT`/`WITH`, двухуровневая защита (guard + read-only сессия PostgreSQL).
-- **Слой метрик (semantic layer):** канонические определения и синонимы в `mcp-server/metrics.json`, автообновление без перезапуска.
+- **Семантическое ядро:** YAML-модели таблиц (`mcp-server/src/models/*.yaml`) и реестр связей (`src/relationships.yaml`): измерения и типизированные меры с синонимами, автообновление без перезапуска.
 - **Тестовая база застройщика:** 3 ЖК, 8 корпусов, 254 квартиры, продажи с планом/фактом, ход строительства, cash-flow (данные генерируются детерминированно).
 
 ## Состав
@@ -18,7 +18,7 @@ An MCP server that turns Russian natural-language questions into SQL against a r
 | `docker-compose.yml` | PostgreSQL 16 в Docker (порт 5433) |
 | `db/` | Схема БД (звезда) + генератор тестовых данных + описание |
 | `mcp-server/` | Код MCP-сервера: инструменты `nl_to_sql`, `execute_sql`, `refresh_schema` |
-| `mcp-server/metrics.json` | Слой метрик: 13 канонических определений с синонимами |
+| `mcp-server/src/models/`, `mcp-server/src/relationships.yaml` | Семантическое ядро: модели таблиц и связи, редактируются аналитиками |
 | `docs/cheatsheet.md` | Шпаргалка для руководства и аналитиков (как спрашивать, каталог вопросов) |
 | `.kimi-code/mcp.json` | Готовая регистрация для Kimi Code CLI |
 
