@@ -41,6 +41,21 @@ accepts('полный план', {
   note: 'тест',
 });
 
+// регрессия: элементы подпланов с ref не должны терять ref при zod-union
+{
+  const plan = parsePlan({
+    with: [
+      { name: 'p', from: 'sales', select: [{ ref: 'deals', alias: 'deals' }], where: [{ ref: 'sale_date', op: '>=', value: '2026-01-01' }] },
+      { name: 'c', from: 'channels', select: [{ ref: 'name', alias: 'channel' }] },
+    ],
+    join: [{ cte: 'p' }, { cte: 'c', type: 'cross' }],
+    select: [{ cte: 'p', col: 'deals', alias: 'deals' }],
+  });
+  const ok = plan.with[0].select[0].ref === 'deals' && plan.with[1].select[0].ref === 'name';
+  if (ok) { passed++; console.log('PASS  подпланы: ref элементов сохраняется после парсинга'); }
+  else { failures.push('subplan-ref'); console.log('FAIL  подпланы: ref элементов сохраняется\n      получено:', JSON.stringify(plan.with)); }
+}
+
 rejects('пустой select', { from: 'sales', select: [] }, 'select');
 rejects('неизвестный ключ', { from: 'sales', select: [{ ref: 'deals', alias: 'deals' }], having: [] }, 'having');
 rejects('плохой алиас', { from: 'sales', select: [{ ref: 'deals', alias: 'Deals!' }] }, 'alias');

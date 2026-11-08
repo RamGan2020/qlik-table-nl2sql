@@ -37,8 +37,38 @@ function buildSystemPrompt(schemaText, semanticBlock = '', examplesBlock = '') {
 - Процентные меры (доли, готовность) уже в процентах — scale не указывай.
 - Факт продаж за период без сравнения с планом считай по всем доступным месяцам, включая текущий.
 
-Если вопрос нельзя выразить одной моделью-фактом (сравнение плана и факта в одной таблице, факторный анализ, арифметика между мерами разных моделей) — не выдумывай план, ответь:
+Если вопрос нельзя выразить планом (нужна произвольная логика вне мер/измерений/выражений) — не выдумывай план, ответь:
 {"unanswerable": "краткая причина, что не поддержано"}
+
+Сравнение плана и факта, факторный анализ и другие задачи над НЕСКОЛЬКИМИ моделями выражаются подпланами:
+{
+  "with": [
+    {"name": "plan", "from": "sales_plan",
+     "select": [{"ref": "object", "alias": "object"}, {"ref": "planned_revenue", "alias": "plan_rev"}],
+     "where": [{"ref": "month", "op": ">=", "value": "2026-01-01"}, {"ref": "month", "op": "<", "value": "2027-01-01"}],
+     "group_by": ["object"]},
+    {"name": "fact", "from": "sales",
+     "select": [{"ref": "object", "alias": "object"}, {"ref": "revenue", "alias": "fact_rev"}],
+     "where": [{"ref": "sale_date", "op": ">=", "value": "2026-01-01"}, {"ref": "sale_date", "op": "<", "value": "2027-01-01"}],
+     "group_by": ["object"]},
+    {"name": "objs", "from": "objects", "select": [{"ref": "name", "alias": "object"}]}
+  ],
+  "join": [{"cte": "objs"},
+           {"cte": "plan", "type": "left", "on": [["object", "object"]]},
+           {"cte": "fact", "type": "left", "on": [["object", "object"]]}],
+  "select": [
+    {"cte": "objs", "col": "object", "alias": "object"},
+    {"expr": {"fn": "coalesce", "args": [{"cte": "plan", "col": "plan_rev"}, 0]}, "alias": "plan_mln", "scale": 1000000, "round": 1},
+    {"expr": {"fn": "coalesce", "args": [{"cte": "fact", "col": "fact_rev"}, 0]}, "alias": "fact_mln", "scale": 1000000, "round": 1}
+  ],
+  "order_by": [{"alias": "object", "dir": "asc"}]
+}
+Правила подпланов: каждый with — обычный запрос по одной модели (select/where/group_by); имя подплана = источник колонок для внешнего запроса. join[0] — FROM, остальные соединяются по on: пара [колонка уже введённого подплана, колонка нового]; type: left/right/full/inner/cross (по умолчанию inner). Внешний select: либо {"cte", "col"}, либо {"expr": ...} — выражение из чисел, колонок {"cte","col"}, арифметики {"op":"+|-|*|/","a","b"} и {"fn":"coalesce","args":[...]}. Внешний where — ref вида "подплан.колонка". Процент выполнения плана: {"expr": {"op": "*", "a": 100, "b": {"op": "/", "a": {"cte":"fact","col":"fact_rev"}, "b": {"cte":"plan","col":"plan_rev"}}}, "round": 1}.
+
+Одиночный расчёт без группировки (факторный анализ и т.п.): подпланы без group_by дают по одной строке и соединяются {"type": "cross"} — декартово произведение строк.
+
+Фильтр «мера против меры» в одиночной модели: value может быть выражением, например
+{"ref": "readiness_pct", "op": "<", "value": {"op": "-", "a": {"ref": "planned_readiness_pct"}, "b": 5}}
 
 Отвечай СТРОГО одним JSON-объектом без текста вокруг:
 {"plan": {...}, "explanation": "кратко (1 предложение), что считает запрос"}

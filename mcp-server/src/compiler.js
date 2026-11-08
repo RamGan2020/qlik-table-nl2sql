@@ -1,18 +1,18 @@
 // Детерминированный компилятор: IR (план) -> SQL (PostgreSQL) через polyglot.
 //
 // Гарантии:
-// - SQL строится только из сущностей семантического слоя (меры/измерения/связи);
-//   неизвестное — честный отказ, свободный SQL не допускается.
+// - SQL строится только из сущностей семантического слоя (меры/измерения/связи)
+//   и структуры плана; неизвестное — честный отказ, свободный SQL недопустим.
 // - Детерминизм: один план -> один и тот же SQL. Алиасы таблиц фиксированы,
-//   джойны — обход графа relationships.yaml в порядке BFS с отсортированной
-//   адъяцентностью (каждая таблица присоединяется один раз, по ребру от
-//   родителя), порядок конструкций — порядок плана.
+//   джойны — кратчайшие пути по графу relationships.yaml (BFS с отсортированной
+//   адъяцентностью), порядок конструкций — порядок плана.
 // - Фрагменты YAML квалифицированы именами таблиц; в SQL они подставляются
-//   через AST-проход polyglot (renameTables), поэтому голые колонки
-//   не создают неоднозначностей при джойнах.
+//   AST-проходом polyglot (renameTables), голые колонки не неоднозначны.
+// - Вывод проходит parse + generate (PostgreSQL-диалект): сбой синтаксиса —
+//   исключение, некорректный SQL наружу не уходит.
 //
-// Вывод проходит parse + generate (polyglot, PostgreSQL-диалект): сбой
-// синтаксиса на этом этапе — исключение, некорректный SQL наружу не уходит.
+// Два вида планов (ir.js): v1 — одна модель-факт; v2 — подпланы (with) -> CTE,
+// внешний запрос соединяет их (join) и оперирует колонками CTE и expr.
 
 import { parse, generate, Dialect, ast } from '@polyglot-sql/sdk';
 
@@ -49,6 +49,19 @@ function rewriteFragment(sql) {
 function qualifyRef(tableCol) {
   const [t, c] = String(tableCol).split('.');
   return `${ALIASES[t] ?? t}.${c}`;
+}
+
+/** AST-проверка и канонический рендер. Бросает Error при синтаксической ошибке. */
+function finalize(text) {
+  const parsed = parse(text, PG);
+  if (!parsed.success) {
+    throw new Error(`скомпилированный SQL не прошёл синтаксическую проверку: ${parsed.error}`);
+  }
+  const gen = generate(parsed.ast, PG);
+  if (!gen.success || !gen.sql?.[0]) {
+    throw new Error(`не удалось отрендерить SQL: ${gen.error ?? 'unknown'}`);
+  }
+  return gen.sql[0];
 }
 
 // ---------- разрешение сущностей ----------
@@ -89,6 +102,51 @@ function resolveRef(model, ref) {
     ...(model.measures ?? []).map((m) => m.name),
   ];
   throw new Error(`в модели "${model.name}" нет измерения или меры "${ref}" (доступны: ${names.join(', ') || '—'})`);
+}
+
+// ---------- выражения (IR v2) ----------
+
+function isExpr(v) {
+  return (
+    typeof v === 'object' && v !== null && !Array.isArray(v) &&
+    ('ref' in v || 'cte' in v || 'op' in v || 'fn' in v)
+  );
+}
+
+/**
+ * Рендер expr: число | {ref} (модель) | {cte,col} | {op,a,b} | {fn:coalesce}.
+ * ctx: {model} — внутри подплана; {cteCols} — во внешнем запросе;
+ * {model, refAlias} — фильтры поверх latest_snapshot: ref подставляется алиасом колонки.
+ */
+function renderExpr(e, ctx) {
+  if (typeof e === 'number') {
+    if (!Number.isFinite(e)) throw new Error('числовой литерал должен быть конечным числом');
+    return String(e);
+  }
+  if (typeof e !== 'object' || e === null) throw new Error(`невалидное выражение: ${JSON.stringify(e)}`);
+  if ('ref' in e) {
+    if (ctx.refAlias?.has(e.ref)) return ctx.refAlias.get(e.ref);
+    if (!ctx.model) throw new Error(`"{ref: ${e.ref}}" недопустим вне подплана`);
+    return resolveRef(ctx.model, e.ref).expr;
+  }
+  if ('cte' in e) {
+    if (!ctx.cteCols) throw new Error(`"{cte: ${e.cte}}" допустим только во внешнем запросе с подпланами`);
+    if (!ctx.cteCols.has(e.cte)) throw new Error(`неизвестный подплан "${e.cte}" (доступны: ${[...ctx.cteCols.keys()].join(', ')})`);
+    if (!ctx.cteCols.get(e.cte).has(e.col)) {
+      throw new Error(`в подплане "${e.cte}" нет колонки "${e.col}" (доступны: ${[...ctx.cteCols.get(e.cte)].join(', ')})`);
+    }
+    return `${e.cte}.${e.col}`;
+  }
+  if ('op' in e) {
+    const a = renderExpr(e.a, ctx);
+    const b = renderExpr(e.b, ctx);
+    return `(${a}) ${e.op} (${b})`;
+  }
+  if ('fn' in e) {
+    if (e.fn !== 'coalesce') throw new Error(`неподдержанная функция "${e.fn}" (доступны: coalesce)`);
+    return `COALESCE(${e.args.map((a) => renderExpr(a, ctx)).join(', ')})`;
+  }
+  throw new Error(`невалидное выражение: ${JSON.stringify(e)}`);
 }
 
 // ---------- литералы ----------
@@ -134,14 +192,20 @@ function checkDomain(value, entity) {
   }
 }
 
-function renderCondition(f, resolved) {
+/** Фильтр в контексте модели: value — литерал | {"ref": ...} | expr над ref. */
+function renderModelCondition(f, model, resolved) {
+  if (!resolved.has(f.ref)) resolved.set(f.ref, resolveRef(model, f.ref));
   const entity = resolved.get(f.ref);
-  if (!entity) throw new Error(`фильтр ссылается на неизвестный ref "${f.ref}"`);
   const nullary = f.op === 'is_null' || f.op === 'is_not_null';
   if (!nullary && f.value === undefined) {
     throw new Error(`фильтр "${f.ref}" ${f.op}: не задано value`);
   }
   if (nullary) return `${entity.expr} IS ${f.op === 'is_null' ? 'NULL' : 'NOT NULL'}`;
+
+  if (isExpr(f.value)) {
+    if (f.op === 'in') throw new Error(`фильтр "${f.ref}" in: value-выражения не поддерживаются для in`);
+    return `${entity.expr} ${f.op} ${renderExpr(f.value, { model })}`;
+  }
 
   if (entity.kind === 'measure') {
     if (f.op === 'in') throw new Error(`фильтр по мере "${f.ref}": op "in" не поддерживается для мер`);
@@ -188,17 +252,15 @@ function buildAdjacency(relationships) {
 }
 
 /**
- * Дерево джойнов: кратчайшие пути от факта к каждой требуемой таблице,
- * развёрнутые в список рёбер. Промежуточные таблицы пути включаются
- * автоматически; побочные ветви обхода — нет. Детерминировано
- * (адъяцентность отсортирована, цели разбираются в отсортированном порядке).
+ * Список джойнов: кратчайшие пути от факта к каждой требуемой таблице,
+ * развёрнутые в рёбра; промежуточные таблицы пути включаются автоматически,
+ * побочные ветви обхода — нет. Детерминировано.
  */
 function resolveJoins(fact, required, relationships) {
   const adj = buildAdjacency(relationships);
   const targets = [...required].filter((t) => t !== fact).sort();
   if (!targets.length) return [];
 
-  // BFS от факта по всему графу: дерево предков
   const prev = new Map(); // table -> {parent, from, to}
   const visited = new Set([fact]);
   let frontier = [fact];
@@ -222,7 +284,6 @@ function resolveJoins(fact, required, relationships) {
     );
   }
 
-  // разворачиваем пути fact -> target, дедуплицируем рёбра
   const joins = [];
   const seen = new Set();
   for (const t of targets) {
@@ -246,75 +307,105 @@ function resolveJoins(fact, required, relationships) {
   return joins;
 }
 
-// ---------- сборка ----------
+// ---------- сборка модельного запроса (v1 и тело подплана) ----------
+
+function findModel(semantic, name) {
+  const models = semantic?.models ?? [];
+  const model = models.find((m) => m.name === name);
+  if (!model) {
+    throw new Error(`неизвестная модель "${name}" (доступны: ${models.map((m) => m.name).join(', ') || '—'})`);
+  }
+  return model;
+}
+
+function wrapMeasure(expr, scale, round) {
+  if (scale !== undefined && round !== undefined) return `ROUND((${expr}) / ${scale}, ${round})`;
+  if (scale !== undefined) return `(${expr}) / ${scale}`;
+  if (round !== undefined) return `ROUND(${expr}, ${round})`;
+  return expr;
+}
 
 /**
- * plan — валидированный parsePlan-ом объект.
- * semantic — { models, relationships } из семантического загрузчика.
- * Возвращает детерминированный SQL (PostgreSQL). Бросает Error с причиной отказа.
+ * Собирает SELECT над одной моделью (v1-запрос целиком либо тело подплана).
+ * Возвращает {text, aliases} — текст без финального AST-прохода и множество
+ * алиасов колонок. orderExprs/limit — только для v1.
  */
-export function compilePlan(plan, semantic) {
-  const models = semantic?.models ?? [];
-  const model = models.find((m) => m.name === plan.from);
-  if (!model) {
-    throw new Error(`неизвестная модель "${plan.from}" (доступны: ${models.map((m) => m.name).join(', ') || '—'})`);
-  }
+function assembleModelQuery({ model, selectItems, where, groupBy, orderExprs = [], limit }, semantic, { allowSnapshot }) {
   const fact = model.physical.table;
-
-  // select
   const seenAliases = new Set();
-  const items = plan.select.map((s) => {
+  const aliases = new Set();
+
+  const items = selectItems.map((s) => {
     if (seenAliases.has(s.alias)) throw new Error(`дублирующийся алиас колонки "${s.alias}"`);
     seenAliases.add(s.alias);
-    const entity = resolveRef(model, s.ref);
-    if ((s.scale !== undefined || s.round !== undefined) && entity.kind !== 'measure') {
-      throw new Error(`scale/round допустимы только для мер (select "${s.ref}")`);
+    aliases.add(s.alias);
+    let entity;
+    if (s.cte || s.col) {
+      throw new Error(`select "${s.alias}": cte+col допустимы только во внешнем запросе с подпланами (with)`);
+    }
+    if (s.expr !== undefined) {
+      entity = { kind: 'expr', name: s.alias, expr: renderExpr(s.expr, { model }), requiresJoin: [] };
+    } else {
+      entity = resolveRef(model, s.ref);
+      if ((s.scale !== undefined || s.round !== undefined) && entity.kind === 'dimension') {
+        throw new Error(`scale/round допустимы только для мер и выражений (select "${s.ref}")`);
+      }
     }
     return { ...s, entity };
   });
 
-  // where/having
   const resolved = new Map();
-  const wheres = [];
-  const havings = [];
-  for (const f of plan.where ?? []) {
+  const whereList = []; // [{f, entity}] — рендер позже: обычный или поверх среза
+  const havingList = [];
+  for (const f of where ?? []) {
     if (!resolved.has(f.ref)) resolved.set(f.ref, resolveRef(model, f.ref));
-    const cond = renderCondition(f, resolved);
-    (resolved.get(f.ref).kind === 'measure' ? havings : wheres).push(cond);
+    const entity = resolved.get(f.ref);
+    // фильтр по агрегирующей мере — HAVING; по измерению и latest_snapshot — WHERE
+    const toHaving = entity.kind === 'measure' && entity.measureType !== 'latest_snapshot';
+    (toHaving ? havingList : whereList).push({ f, entity });
   }
+  const havings = havingList.map(({ f }) => renderModelCondition(f, model, resolved));
 
-  // group_by
   const dimItems = items.filter((i) => i.entity.kind === 'dimension');
   const measureItems = items.filter((i) => i.entity.kind === 'measure');
+  const exprItems = items.filter((i) => i.entity.kind === 'expr');
 
-  // latest_snapshot: DISTINCT ON, без группировки и HAVING
   const snapshotItems = measureItems.filter((i) => i.entity.measureType === 'latest_snapshot');
+  if (snapshotItems.length && !allowSnapshot) {
+    throw new Error('latest_snapshot-меры в подпланах не поддержаны — вынеси их в основной запрос');
+  }
   if (snapshotItems.length) {
     if (snapshotItems.length !== measureItems.length) {
       throw new Error('latest_snapshot-меры нельзя смешивать с агрегирующими мерами в одном запросе');
     }
-    if (plan.group_by?.length || havings.length) {
+    if (groupBy?.length || havings.length) {
       throw new Error('latest_snapshot-меры не работают с group_by и фильтрами по мерам');
     }
   }
   const snapshotExpr = snapshotItems[0]?.entity.snapshotKey ?? null;
 
   let groupExprs = [];
-  if (plan.group_by?.length) {
-    groupExprs = plan.group_by.map((ref) => {
-      const item = dimItems.find((i) => i.ref === ref);
-      if (!item) throw new Error(`group_by "${ref}": нет такого измерения в select (группировать можно только по измерениям из select)`);
+  if (groupBy?.length) {
+    groupExprs = groupBy.map((ref) => {
+      const item = items.find((i) => i.ref === ref);
+      if (!item) throw new Error(`group_by "${ref}": нет такого ref в select (группировать можно только по элементам select с ref)`);
+      if (item.entity.kind !== 'dimension') throw new Error(`group_by "${ref}": группировка только по измерениям`);
       return item.entity.expr;
     });
   } else if (measureItems.length && dimItems.length && !snapshotItems.length) {
     groupExprs = dimItems.map((i) => i.entity.expr); // авто-группировка по всем измерениям select
   }
 
-  // order_by — только по алиасам select
-  const orderExprs = (plan.order_by ?? []).map((o) => {
-    if (!seenAliases.has(o.alias)) throw new Error(`order_by "${o.alias}": нет колонки с таким алиасом в select`);
-    return `${o.alias} ${(o.dir ?? 'asc').toUpperCase()}`;
-  });
+  // latest_snapshot + WHERE: фильтр должен применяться К ВЫБРАННОМУ срезу,
+  // а не выбирать последний месяц среди подходящих — оборачиваем в подзапрос
+  let wheres = [];
+  let aliasWrap = null;
+  if (snapshotExpr && whereList.length) {
+    const refAlias = new Map(items.filter((i) => i.ref).map((i) => [i.ref, i.alias]));
+    aliasWrap = whereList.map(({ f, entity }) => renderAliasedCondition(f, entity, model, refAlias));
+  } else {
+    wheres = whereList.map(({ f }) => renderModelCondition(f, model, resolved));
+  }
 
   // джойны
   const required = new Set([fact]);
@@ -322,19 +413,13 @@ export function compilePlan(plan, semantic) {
   for (const e of resolved.values()) for (const t of e.requiresJoin) required.add(t);
   const joins = resolveJoins(fact, required, semantic.relationships);
 
-  // ---- текст ----
   const selectList = items.map((i) => {
     let expr = i.entity.expr;
-    if (i.entity.kind === 'measure') {
-      if (i.scale !== undefined && i.round !== undefined) expr = `ROUND((${expr}) / ${i.scale}, ${i.round})`;
-      else if (i.scale !== undefined) expr = `(${expr}) / ${i.scale}`;
-      else if (i.round !== undefined) expr = `ROUND(${expr}, ${i.round})`;
-    }
+    if (i.entity.kind !== 'dimension') expr = wrapMeasure(expr, i.scale, i.round);
     return `${expr} AS ${i.alias}`;
   });
 
-  const distinctOn = snapshotExpr ? `DISTINCT ON (${snapshotExpr}) ` : '';
-  const parts = [`SELECT ${distinctOn}${selectList.join(', ')}`, `FROM ${fact} AS ${ALIASES[fact]}`];
+  const parts = [`SELECT ${snapshotExpr ? `DISTINCT ON (${snapshotExpr}) ` : ''}${selectList.join(', ')}`, `FROM ${fact} AS ${ALIASES[fact]}`];
   for (const j of joins) {
     parts.push(`JOIN ${j.table} AS ${ALIASES[j.table]} ON ${qualifyRef(j.from)} = ${qualifyRef(j.to)}`);
   }
@@ -348,17 +433,185 @@ export function compilePlan(plan, semantic) {
   }
   orderParts.push(...orderExprs);
   if (orderParts.length) parts.push(`ORDER BY ${orderParts.join(', ')}`);
+  if (limit !== undefined) parts.push(`LIMIT ${limit}`);
+
+  const text = parts.join(' ');
+  return {
+    text: aliasWrap ? `SELECT * FROM (${text}) AS _snap WHERE ${aliasWrap.join(' AND ')}` : text,
+    aliases,
+  };
+}
+
+/** Условие поверх среза latest_snapshot: колонки подставляются алиасами select. */
+function renderAliasedCondition(f, entity, model, refAlias) {
+  const left = refAlias.get(f.ref);
+  if (!left) {
+    throw new Error(
+      `фильтр по "${f.ref}": в запросе с latest_snapshot фильтр применяется к выбранному срезу — ` +
+      `выведи "${f.ref}" в select, чтобы можно было отфильтровать`,
+    );
+  }
+  const nullary = f.op === 'is_null' || f.op === 'is_not_null';
+  if (!nullary && f.value === undefined) {
+    throw new Error(`фильтр "${f.ref}" ${f.op}: не задано value`);
+  }
+  if (nullary) return `${left} IS ${f.op === 'is_null' ? 'NULL' : 'NOT NULL'}`;
+  if (isExpr(f.value)) {
+    if (f.op === 'in') throw new Error(`фильтр "${f.ref}" in: value-выражения не поддерживаются для in`);
+    return `${left} ${f.op} ${renderExpr(f.value, { model, refAlias })}`;
+  }
+  if (entity.kind === 'measure' || entity.kind === 'expr') {
+    if (typeof f.value !== 'number') {
+      throw new Error(`фильтр по "${f.ref}": value должен быть числом, получено ${JSON.stringify(f.value)}`);
+    }
+    return `${left} ${f.op} ${renderLiteral(f.value)}`;
+  }
+  if (f.op === 'in') {
+    if (!Array.isArray(f.value) || !f.value.length) throw new Error(`фильтр "${f.ref}" in: value должен быть непустым массивом`);
+    for (const v of f.value) {
+      checkValueType(v, entity.type, f.ref);
+      checkDomain(v, entity);
+    }
+    return `${left} IN (${f.value.map((v) => renderLiteral(v, entity.type)).join(', ')})`;
+  }
+  checkValueType(f.value, entity.type, f.ref);
+  checkDomain(f.value, entity);
+  return `${left} ${f.op} ${renderLiteral(f.value, entity.type)}`;
+}
+
+// ---------- точка входа ----------
+
+/**
+ * plan — валидированный parsePlan-ом объект.
+ * semantic — { models, relationships } из семантического загрузчика.
+ * Возвращает детерминированный SQL (PostgreSQL). Бросает Error с причиной отказа.
+ */
+export function compilePlan(plan, semantic) {
+  if (plan.with?.length) return compileWithPlan(plan, semantic);
+  const model = findModel(semantic, plan.from);
+
+  const orderExprs = (plan.order_by ?? []).map((o) => {
+    if (!plan.select.some((s) => s.alias === o.alias)) throw new Error(`order_by "${o.alias}": нет колонки с таким алиасом в select`);
+    return `${o.alias} ${(o.dir ?? 'asc').toUpperCase()}`;
+  });
+
+  const { text } = assembleModelQuery(
+    { model, selectItems: plan.select, where: plan.where, groupBy: plan.group_by, orderExprs, limit: plan.limit },
+    semantic,
+    { allowSnapshot: true },
+  );
+  return finalize(text);
+}
+
+// ---------- IR v2: подпланы -> CTE, внешний запрос ----------
+
+function compileWithPlan(plan, semantic) {
+  // подпланы
+  const cteCols = new Map(); // name -> Set<alias>
+  const inners = [];
+  for (const sp of plan.with) {
+    if (cteCols.has(sp.name)) throw new Error(`дублирующееся имя подплана "${sp.name}"`);
+    const model = findModel(semantic, sp.from);
+    const { text, aliases } = assembleModelQuery(
+      { model, selectItems: sp.select, where: sp.where, groupBy: sp.group_by },
+      semantic,
+      { allowSnapshot: false },
+    );
+    cteCols.set(sp.name, aliases);
+    inners.push(`${sp.name} AS (${text})`);
+  }
+
+  // соединение
+  const join = plan.join ?? [];
+  if (join.length < 2) throw new Error('join: нужно минимум два подплана для соединения');
+  if (!cteCols.has(join[0].cte)) throw new Error(`join: неизвестный подплан "${join[0].cte}"`);
+  if (join[0].type || join[0].on) throw new Error('join: первая запись — это FROM, у неё не должно быть type/on');
+  const introduced = new Set([join[0].cte]);
+  const joinSqls = [];
+  const JOIN_TYPE = { left: 'LEFT JOIN', right: 'RIGHT JOIN', full: 'FULL OUTER JOIN', inner: 'JOIN' };
+  for (const j of join.slice(1)) {
+    if (!cteCols.has(j.cte)) throw new Error(`join: неизвестный подплан "${j.cte}" (доступны: ${[...cteCols.keys()].join(', ')})`);
+    const type = j.type ?? 'inner';
+    if (type === 'cross') {
+      if (j.on?.length) throw new Error(`join ${j.cte}: CROSS JOIN не принимает on`);
+      joinSqls.push(`CROSS JOIN ${j.cte}`);
+    } else {
+      if (!j.on?.length) throw new Error(`join ${j.cte}: нужен on — пары колонок [левая, правая]`);
+      const conds = j.on.map(([a, b]) => {
+        const curHas = (c) => cteCols.get(j.cte).has(c);
+        // владелец левой колонки: ПЕРВЫЙ введённый подплан, где она есть
+        // (якорная семантика: план/факт цепляются к базовому справочнику,
+        // а не друг к другу; детерминировано — порядок introduced фиксирован)
+        const ownerOf = (c) => {
+          for (const name of introduced) {
+            if (cteCols.get(name).has(c)) return name;
+          }
+          return null;
+        };
+        const ownerA = ownerOf(a);
+        const ownerB = ownerOf(b);
+        if (ownerA && curHas(b)) return `${ownerA}.${a} = ${j.cte}.${b}`;
+        if (ownerB && curHas(a)) return `${ownerB}.${b} = ${j.cte}.${a}`;
+        throw new Error(
+          `join ${j.cte}: пара [${a}, ${b}] не разрешается — проверь имена колонок ` +
+          `(уже введены: ${[...introduced].map((n) => `${n}(${[...cteCols.get(n)].join(',')})`).join(' ')}; в ${j.cte}: ${[...cteCols.get(j.cte)].join(',')})`,
+        );
+      });
+      joinSqls.push(`${JOIN_TYPE[type]} ${j.cte} ON ${conds.join(' AND ')}`);
+    }
+    introduced.add(j.cte);
+  }
+
+  // внешний select
+  const seenAliases = new Set();
+  const selectList = plan.select.map((s) => {
+    if (seenAliases.has(s.alias)) throw new Error(`дублирующийся алиас колонки "${s.alias}"`);
+    seenAliases.add(s.alias);
+    let expr;
+    if (s.expr !== undefined) {
+      expr = renderExpr(s.expr, { cteCols });
+    } else if (s.cte && s.col) {
+      if (!cteCols.has(s.cte)) throw new Error(`select "${s.alias}": неизвестный подплан "${s.cte}"`);
+      if (!cteCols.get(s.cte).has(s.col)) throw new Error(`select "${s.alias}": в подплане "${s.cte}" нет колонки "${s.col}"`);
+      expr = `${s.cte}.${s.col}`;
+    } else {
+      throw new Error(`select "${s.alias}": нужен либо expr, либо cte+col`);
+    }
+    return `${wrapMeasure(expr, s.scale, s.round)} AS ${s.alias}`;
+  });
+
+  // внешний where: ref вида "cte.col"
+  const wheres = (plan.where ?? []).map((f) => {
+    const [cte, col, ...rest] = String(f.ref).split('.');
+    if (rest.length || !cte || !col) throw new Error(`фильтр "${f.ref}": во внешнем запросе ref задаётся как "подплан.колонка"`);
+    if (!cteCols.has(cte)) throw new Error(`фильтр "${f.ref}": неизвестный подплан "${cte}"`);
+    if (!cteCols.get(cte).has(col)) throw new Error(`фильтр "${f.ref}": в подплане "${cte}" нет колонки "${col}"`);
+    const left = `${cte}.${col}`;
+    const nullary = f.op === 'is_null' || f.op === 'is_not_null';
+    if (nullary) return `${left} IS ${f.op === 'is_null' ? 'NULL' : 'NOT NULL'}`;
+    if (f.value === undefined) throw new Error(`фильтр "${f.ref}" ${f.op}: не задано value`);
+    if (isExpr(f.value)) return `${left} ${f.op} ${renderExpr(f.value, { cteCols })}`;
+    if (f.op === 'in') {
+      if (!Array.isArray(f.value) || !f.value.length) throw new Error(`фильтр "${f.ref}" in: value должен быть непустым массивом`);
+      return `${left} IN (${f.value.map((v) => renderLiteral(v)).join(', ')})`;
+    }
+    return `${left} ${f.op} ${renderLiteral(f.value)}`;
+  });
+
+  if (plan.group_by?.length) {
+    throw new Error('group_by во внешнем запросе с подпланами не поддержан — группируй внутри подпланов');
+  }
+
+  const orderExprs = (plan.order_by ?? []).map((o) => {
+    if (!seenAliases.has(o.alias)) throw new Error(`order_by "${o.alias}": нет колонки с таким алиасом в select`);
+    return `${o.alias} ${(o.dir ?? 'asc').toUpperCase()}`;
+  });
+
+  const parts = [`SELECT ${selectList.join(', ')}`, `FROM ${join[0].cte}`];
+  parts.push(...joinSqls);
+  if (wheres.length) parts.push(`WHERE ${wheres.join(' AND ')}`);
+  if (orderExprs.length) parts.push(`ORDER BY ${orderExprs.join(', ')}`);
   if (plan.limit !== undefined) parts.push(`LIMIT ${plan.limit}`);
 
-  // ---- AST-проверка и канонический рендер ----
-  const text = parts.join(' ');
-  const parsed = parse(text, PG);
-  if (!parsed.success) {
-    throw new Error(`скомпилированный SQL не прошёл синтаксическую проверку: ${parsed.error}`);
-  }
-  const gen = generate(parsed.ast, PG);
-  if (!gen.success || !gen.sql?.[0]) {
-    throw new Error(`не удалось отрендерить SQL: ${gen.error ?? 'unknown'}`);
-  }
-  return gen.sql[0];
+  return finalize(`WITH ${inners.join(', ')} ${parts.join(' ')}`);
 }
