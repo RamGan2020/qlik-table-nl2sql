@@ -140,6 +140,8 @@ function renderExpr(e, ctx) {
   if ('op' in e) {
     const a = renderExpr(e.a, ctx);
     const b = renderExpr(e.b, ctx);
+    // знаменатель защищаем от деления на ноль: x/NULL -> NULL вместо ошибки
+    if (e.op === '/') return `(${a}) / NULLIF((${b}), 0)`;
     return `(${a}) ${e.op} (${b})`;
   }
   if ('fn' in e) {

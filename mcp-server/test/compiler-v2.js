@@ -183,6 +183,31 @@ async function executes(name, sql, minRows = 1) {
   }
 }
 
+// --- деление: защита знаменателя от ноля (x/NULL вместо ошибки) ---
+{
+  const plan = {
+    with: [
+      { name: 'chn', from: 'channels', select: [{ ref: 'name', alias: 'channel' }] },
+      { name: 'plan', from: 'sales_plan',
+        select: [{ ref: 'channel', alias: 'channel' }, { ref: 'planned_revenue', alias: 'plan_rev' }],
+        where: [{ ref: 'month', op: '=', value: '2026-10-01' }, { ref: 'object', op: '=', value: 'ЖК «Заречный»' }],
+        group_by: ['channel'] },
+    ],
+    join: [{ cte: 'chn' }, { cte: 'plan', type: 'left', on: [['channel', 'channel']] }],
+    select: [
+      { cte: 'chn', col: 'channel', alias: 'channel' },
+      { expr: { op: '/', a: 100, b: { fn: 'coalesce', args: [{ cte: 'plan', col: 'plan_rev' }, 0] } }, alias: 'completion_pct', round: 1 },
+    ],
+    order_by: [{ alias: 'channel', dir: 'asc' }],
+  };
+  const sql = compiles('деление: NULLIF в знаменателе', plan, ['NULLIF']);
+  if (sql) {
+    check('деление: без ошибки деления на ноль', true);
+    const rows = await executes('деление: NULL вместо ошибки', sql, 5);
+    if (rows) check('деление: у канала без плана NULL', rows.some((r) => r.completion_pct === null), JSON.stringify(rows));
+  }
+}
+
 // --- отказы ---
 const W = (extra) => ({
   with: [

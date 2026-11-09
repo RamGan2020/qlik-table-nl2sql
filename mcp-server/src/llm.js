@@ -31,6 +31,7 @@ function buildSystemPrompt(schemaText, semanticBlock = '', examplesBlock = '') {
 - select: измерения и меры по имени или синониму. Алиасы — осмысленные, на английском, snake_case: channel, revenue_mln, plan_mln.
 - scale — делитель для вывода (для «в млн рублей» укажи 1000000); round — число знаков после запятой. Только для мер.
 - where: фильтр по измерению уходит в WHERE, по мере — в HAVING. op: =, !=, >, >=, <, <=, in, is_null, is_not_null. Даты — строкой YYYY-MM-DD; список для in — массивом. Значения доменов бери точно как указано в семантическом ядре (в фигурных скобках у измерения).
+- Имена объектов, каналов и другие строковые значения из вопроса копируй ПОСИМВОЛЬНО, включая «ёлочки» и регистр: 'ЖК «Заречный»', а не 'Заречный'. Сокращать или переписывать имена нельзя — иначе фильтр не найдёт строки в данных.
 - Диапазон периода — два фильтра: {"ref": "<дата>", "op": ">=", "value": "YYYY-MM-DD"} и {"ref": "<дата>", "op": "<", "value": "YYYY-MM-DD"} (конец исключительно). «За 2026 год» = от 2026-01-01 до 2027-01-01.
 - group_by можно опустить — тогда группировка будет по всем измерениям из select автоматически. Явный group_by — только по измерениям из select.
 - order_by — только по алиасам из select. limit — целое положительное.
@@ -65,6 +66,12 @@ function buildSystemPrompt(schemaText, semanticBlock = '', examplesBlock = '') {
 }
 Правила подпланов: каждый with — обычный запрос по одной модели (select/where/group_by); имя подплана = источник колонок для внешнего запроса. join[0] — FROM, остальные соединяются по on: пара [колонка уже введённого подплана, колонка нового]; type: left/right/full/inner/cross (по умолчанию inner). Внешний select: либо {"cte", "col"}, либо {"expr": ...} — выражение из чисел, колонок {"cte","col"}, арифметики {"op":"+|-|*|/","a","b"} и {"fn":"coalesce","args":[...]}. Внешний where — ref вида "подплан.колонка". Процент выполнения плана: {"expr": {"op": "*", "a": 100, "b": {"op": "/", "a": {"cte":"fact","col":"fact_rev"}, "b": {"cte":"plan","col":"plan_rev"}}}, "round": 1}.
 
+Если вопрос требует строки справочника целиком (все каналы или все объекты, включая те, где нет ни плана, ни факта) — подплан-якорь строй от модели-справочника (channels, objects), а не от факт-таблицы: FROM channels -> LEFT JOIN plan -> LEFT JOIN fact. Подплан от факта отсечёт записи справочника без данных.
+
+Деление: знаменатель не оборачивай в coalesce(..., 0) — если он отсутствует, результат должен быть NULL (компилятор сам защищает знаменатель NULLIF, NULL/пропуск корректнее нуля).
+
+План/факт-отчёты: отсутствующую сторону показывай нулём — {"expr": {"fn": "coalesce", "args": [{"cte": "plan", "col": "plan_rev"}, 0]}}. NULL в числовых колонках отчёта недопустим: «не было плана» = 0, а не NULL.
+
 Одиночный расчёт без группировки (факторный анализ и т.п.): подпланы без group_by дают по одной строке и соединяются {"type": "cross"} — декартово произведение строк.
 
 Фильтр «мера против меры» в одиночной модели: value может быть выражением, например
@@ -91,36 +98,84 @@ function unescapeJsonString(s) {
     .replace(/\\\\/g, '\\');
 }
 
-/** Устойчиво извлекает JSON из ответа модели. */
+/** Выделяет объект по ключу с балансировкой фигурных скобок (строки учитываются). */
+function extractBalanced(text, objKey) {
+  const m = text.match(new RegExp(`"${objKey}"\\s*:\\s*\\{`));
+  if (!m) return null;
+  const start = m.index + m[0].length - 1; // на '{'
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/** Устойчиво извлекает JSON из ответа модели (в т.ч. дважды экранированный). */
 export function parseLlmJson(text) {
-  // 1) попытка выделить JSON-блок из ```json ... ``` или {...}
   let candidate = text.trim();
   const fenced = candidate.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced) candidate = fenced[1].trim();
 
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start !== -1 && end > start) {
+  const attempts = [
+    ['прямой JSON.parse', () => JSON.parse(candidate)],
+    // строка, экранированная как JSON-строка: снимаем слой экранирования
+    // и обрамляющие кавычки
+    ['JSON с экранированием', () => {
+      const un = unescapeJsonString(candidate).trim();
+      return JSON.parse(un.startsWith('"') && un.endsWith('"') ? un.slice(1, -1) : un);
+    }],
+  ];
+  for (const [path, fn] of attempts) {
     try {
-      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      const parsed = fn();
       if (parsed && typeof parsed === 'object') {
-        traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'путь: JSON.parse целиком');
+        // модель может вернуть план БЕЗ обёртки {"plan": ...} — ключи наверху;
+        // explanation при этом внутри объекта плана — выделяем его отдельно
+        if (!('plan' in parsed) && !('unanswerable' in parsed) && (parsed.from || parsed.with || parsed.select)) {
+          traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', `путь: ${path}, план без обёртки — оборачиваем`);
+          const { explanation, ...plan } = parsed;
+          return { plan, explanation: String(explanation ?? ''), unanswerable: undefined };
+        }
+        traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', `путь: ${path}`);
         return parsed;
       }
     } catch {
-      // переходим к ручному разбору полей
+      // следующий путь разбора
     }
-    const planMatch = candidate.slice(start, end + 1).match(/"plan"\s*:\s*(\{(?:\\[\s\S]|[\s\S])*?\})\s*[,}]/);
-    if (planMatch) {
-      traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'путь: регулярное выделение полей plan/explanation');
-      const explMatch = candidate.slice(start, end + 1).match(/"explanation"\s*:\s*"((?:\\[\s\S]|[\s\S])*?)"\s*[,}]/);
-      const unansMatch = candidate.slice(start, end + 1).match(/"unanswerable"\s*:\s*"((?:\\[\s\S]|[\s\S])*?)"\s*[,}]/);
-      let plan;
+  }
+
+  // ручное выделение: plan — балансировкой скобок (на сыром и снятом тексте),
+  // остальные поля — regex; каждый шаг под защитой
+  const candidates = [candidate, unescapeJsonString(candidate)];
+  const explMatch = candidate.match(/"explanation"\s*:\s*"((?:\\[\s\S]|[\s\S])*?)"\s*[,}]/);
+  const unansMatch = candidate.match(/"unanswerable"\s*:\s*"((?:\\[\s\S]|[\s\S])*?)"\s*[,}]/);
+  for (const src of candidates) {
+    const planText = extractBalanced(src, 'plan');
+    if (!planText) continue;
+    let plan = null;
+    try {
+      plan = JSON.parse(planText);
+    } catch {
       try {
-        plan = JSON.parse(planMatch[1]);
+        plan = JSON.parse(unescapeJsonString(planText));
       } catch {
-        plan = JSON.parse(unescapeJsonString(planMatch[1]));
+        plan = null;
       }
+    }
+    if (plan && typeof plan === 'object') {
+      traceStep('РАЗБОР ОТВЕТА МОДЕЛИ', 'путь: выделение plan балансировкой скобок');
       return {
         plan,
         explanation: explMatch ? unescapeJsonString(explMatch[1]) : '',

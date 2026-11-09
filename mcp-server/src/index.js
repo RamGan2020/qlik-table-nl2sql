@@ -121,16 +121,27 @@ server.registerTool(
           const sql = compilePlan(plan, semantic);
           return { sql, plan, explanation };
         };
-        const raw = await callNlToSql({
-          apiKey: config.apiKey,
-          baseUrl: config.baseUrl,
-          model: config.model,
-          temperature: config.temperature,
-          schemaText,
-          semanticBlock,
-          examplesBlock,
-          question,
-        });
+        // сеть/формат ответа: один чистый повтор вызова до перехода к ошибке
+        const callLlm = async (correction = null) => {
+          const args = {
+            apiKey: config.apiKey,
+            baseUrl: config.baseUrl,
+            model: config.model,
+            temperature: config.temperature,
+            schemaText,
+            semanticBlock,
+            examplesBlock,
+            question,
+            correction,
+          };
+          try {
+            return await callNlToSql(args);
+          } catch (e1) {
+            traceStep('LLM: первый ответ не получен, повтор', e1.message);
+            return await callNlToSql(args);
+          }
+        };
+        const raw = await callLlm();
         if (raw.unanswerable) {
           traceStep('ПЛАН: вопрос не поддержан', raw.unanswerable);
           return err(`Вопрос не поддержан плановым интерфейсом: ${raw.unanswerable}`);
@@ -140,17 +151,7 @@ server.registerTool(
           traceStep('ПЛАН: скомпилирован', JSON.stringify(result.plan, null, 2));
         } catch (e) {
           traceStep('ПЛАН: отклонён валидацией/компилятором', e.message);
-          const fixed = await callNlToSql({
-            apiKey: config.apiKey,
-            baseUrl: config.baseUrl,
-            model: config.model,
-            temperature: config.temperature,
-            schemaText,
-            semanticBlock,
-            examplesBlock,
-            question,
-            correction: { problems: [e.message], previousPlan: raw.plan },
-          });
+          const fixed = await callLlm({ problems: [e.message], previousPlan: raw.plan });
           if (fixed.unanswerable) {
             return err(`Вопрос не поддержан плановым интерфейсом: ${fixed.unanswerable}`);
           }
