@@ -192,7 +192,7 @@ export function parseLlmJson(text) {
  * Возвращает {plan?, unanswerable?, explanation?} — сырой (непровалидированный) план.
  * Валидация и компиляция — на стороне сервера (ir.js, compiler.js).
  */
-export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 1, semanticBlock = '', examplesBlock = '', correction = null }) {
+export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature = 0, seed = 42, semanticBlock = '', examplesBlock = '', correction = null }) {
   const startedAt = Date.now();
   const system = buildSystemPrompt(schemaText, semanticBlock, examplesBlock);
   const messages = [
@@ -212,7 +212,7 @@ export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question
 
   traceStep(
     correction ? 'LLM ЗАПРОС (исправляющий повтор)' : 'LLM ЗАПРОС',
-    `POST ${baseUrl}/chat/completions\nmodel: ${model}\ntemperature: ${temperature}\n\n` +
+    `POST ${baseUrl}/chat/completions\nmodel: ${model}\ntemperature: ${temperature}\nseed: ${seed}\n\n` +
       messages.map((m, i) => `== message[${i}] ${m.role} ==\n${m.content}`).join('\n\n'),
   );
 
@@ -222,12 +222,17 @@ export async function callNlToSql({ apiKey, baseUrl, model, schemaText, question
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model, temperature, messages }),
+    body: JSON.stringify({ model, temperature, seed, messages }),
   });
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     traceStep('LLM ОШИБКА', `HTTP ${res.status}: ${body.slice(0, 300)}`);
+    // coding-endpoint Kimi допускает только temperature=1: откатываемся один раз
+    if (res.status === 400 && /temperature/.test(body) && temperature !== 1) {
+      traceStep('LLM: temperature отклонена endpointом', `повтор с temperature=1 (seed сохраняется)`);
+      return callNlToSql({ apiKey, baseUrl, model, schemaText, question, temperature: 1, seed, semanticBlock, examplesBlock, correction });
+    }
     throw new Error(`Moonshot API вернул ${res.status}: ${body.slice(0, 300)}`);
   }
 

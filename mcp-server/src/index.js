@@ -35,13 +35,20 @@ const cache = createCache(
       : join(dirname(fileURLToPath(import.meta.url)), '../nl2sql-cache.json'),
 );
 
+const envNum = (v, d) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
+
 const config = {
   databaseUrl: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5433/qlik_table',
   apiKey: process.env.MOONSHOT_API_KEY ?? '',
   baseUrl: (process.env.MOONSHOT_BASE_URL ?? 'https://api.moonshot.ai/v1').replace(/\/+$/, ''),
   model: process.env.MOONSHOT_MODEL ?? 'kimi-k3',
-  temperature: Number(process.env.MOONSHOT_TEMPERATURE ?? 1), // coding-модели допускают только 1; детерминированность даёт кэш (cache.js)
-  maxRows: Number.parseInt(process.env.MAX_ROWS ?? '1000', 10),
+  // детерминированность по возможности: 0 снижает разброс сэмплирования (но не убирает
+  // его полностью — итоговая стабильность повторных вопросов всё равно на кэше).
+  // Coding-endpoint Kimi допускает только 1 — llm.js автоматически повторяет вызов
+  // с temperature=1, если endpoint отклонил значение из конфигурации.
+  temperature: envNum(process.env.MOONSHOT_TEMPERATURE, 0),
+  seed: envNum(process.env.MOONSHOT_SEED, 42),
+  maxRows: envNum(process.env.MAX_ROWS, 1000),
 };
 
 const pool = new pg.Pool({
@@ -128,6 +135,7 @@ server.registerTool(
             baseUrl: config.baseUrl,
             model: config.model,
             temperature: config.temperature,
+            seed: config.seed,
             schemaText,
             semanticBlock,
             examplesBlock,
