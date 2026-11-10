@@ -50,7 +50,7 @@ npm test                  # должно быть 6 PASS
 
 ## 3. Словарь терминов (как система понимает слова)
 
-Каноническое описание данных живёт в YAML-моделях `mcp-server/src/models/*.yaml` и реестре связей `mcp-server/src/relationships.yaml`, подмешивается в каждый запрос. Главные термины:
+Каноническое описание данных живёт в YAML-моделях `mcp-server/src/models/*.yaml` и реестре связей `mcp-server/src/relationships.yaml`, подмешивается в каждый запрос. Правила заполнения моделей — [`mcp-server/src/models/README.md`](../mcp-server/src/models/README.md). Главные термины:
 
 | Термин | Что это | Важно помнить |
 |---|---|---|

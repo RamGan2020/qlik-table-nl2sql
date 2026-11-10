@@ -18,7 +18,7 @@ An MCP server that turns Russian natural-language questions into SQL against a r
 | `docker-compose.yml` | PostgreSQL 16 в Docker (порт 5433) |
 | `db/` | Схема БД (звезда) + генератор тестовых данных + описание |
 | `mcp-server/` | Код MCP-сервера: инструменты `nl_to_sql`, `execute_sql`, `refresh_schema` |
-| `mcp-server/src/models/`, `mcp-server/src/relationships.yaml` | Семантическое ядро: модели таблиц и связи, редактируются аналитиками |
+| `mcp-server/src/models/`, `mcp-server/src/relationships.yaml` | Семантическое ядро: модели таблиц и связи, редактируются аналитиками ([правила заполнения](mcp-server/src/models/README.md)) |
 | `docs/cheatsheet.md` | Шпаргалка для руководства и аналитиков (как спрашивать, каталог вопросов) |
 | `.kimi-code/mcp.json` | Готовая регистрация для Kimi Code CLI |
 
