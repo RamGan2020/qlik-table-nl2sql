@@ -27,6 +27,7 @@ export const ALIASES = {
   construction_progress: 'p',
   cashflow: 'cf',
   dim_date: 'd',
+  reservations: 'r',
 };
 
 const PG = Dialect.PostgreSQL;

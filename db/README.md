@@ -21,13 +21,16 @@ PostgreSQL 16 в Docker (`qlik_table_postgres`), база `qlik_table`.
 | `construction_progress` | факт | помесячно по корпусам: этап, план/факт % готовности, план/факт затраты |
 | `sales` | факт | 160 сделок: дата, канал, цена, скидка, ипотека, тип договора |
 | `sales_plan` | факт | план продаж помесячно по корпусам и каналам (шт/м²/руб) |
+| `reservations` | факт | история бронирований квартир: канал, цена, даты, статус (active/converted/expired/cancelled), ссылка на сделку |
 | `cashflow` | факт | помесячно по объектам: поступления и затраты, план/факт |
 
 ## Контрольная сводка данных
 
-Продано 160 квартир (63%), свободно 83, брони 12.
+Продано 160 квартир (63%), свободно 82, брони 12 (9 — в ЖК «Заречный», 3 — в «Северном парке»).
 По объектам: Заречный 43%, Северный парк 79%, Городской квартал 77% (сдан).
 Готовность корпусов — от 30% (коробка) до 100%, план/факт продаж по месяцам 71–107%.
+История бронирований — 81 событие: 12 активных, 40 перешло в сделки (все sale_id валидны),
+15 сгорело, 14 отменено; у 13 квартир было 2+ брони подряд. Конверсия броней — 49%.
 
 ## Примеры запросов под дашборды
 
@@ -58,6 +61,18 @@ FROM sales_plan sp GROUP BY sp.month ORDER BY 1;
 SELECT c.name, count(s.sale_id) AS deals, sum(s.price) AS revenue
 FROM channels c LEFT JOIN sales s ON s.channel_id = c.channel_id
 GROUP BY c.name ORDER BY revenue DESC;
+```
+
+Конверсия броней в сделки по каналам:
+
+```sql
+SELECT c.name,
+       count(r.reservation_id) AS reservations,
+       count(r.sale_id)        AS converted,
+       round(100.0 * count(r.sale_id) / nullif(count(r.reservation_id), 0), 1) AS conversion_pct
+FROM channels c
+LEFT JOIN reservations r ON r.channel_id = c.channel_id
+GROUP BY c.name ORDER BY conversion_pct DESC NULLS LAST;
 ```
 
 ## Управление

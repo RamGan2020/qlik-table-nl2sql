@@ -15,6 +15,18 @@ relationships:
     to: channels.channel_id
     type: many_to_one
     label: "Сделка совершена по каналу"
+  - from: reservations.unit_id
+    to: units.unit_id
+    type: many_to_one
+    label: "Бронь относится к квартире"
+  - from: reservations.channel_id
+    to: channels.channel_id
+    type: many_to_one
+    label: "Бронь приведена каналом"
+  - from: reservations.sale_id
+    to: sales.sale_id
+    type: many_to_one
+    label: "Бронь перешла в сделку (NULL, если не перешла)"
   - from: sales_plan.building_id
     to: buildings.building_id
     type: many_to_one
@@ -51,3 +63,13 @@ relationships:
     type: one_to_many
     role: calendar
     label: "Календарь по месяцу cashflow"
+  - from: dim_date.date_id
+    to: reservations.reserved_at
+    type: one_to_many
+    role: calendar
+    label: "Календарь по дате брони"
+  - from: dim_date.date_id
+    to: reservations.expires_at
+    type: one_to_many
+    role: calendar
+    label: "Календарь по сгоранию брони"

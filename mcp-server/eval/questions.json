@@ -238,5 +238,23 @@
     "level": 3,
     "question": "Доля каждого объекта в числе сделок 2026 года в процентах с одним знаком",
     "reference_sql": "SELECT o.name AS object, round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS share_pct FROM sales s JOIN units u ON u.unit_id = s.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE s.sale_date >= DATE '2026-01-01' AND s.sale_date < DATE '2027-01-01' GROUP BY o.name"
+  },
+  {
+    "id": "reserv-conversion-by-channel-2026",
+    "level": 3,
+    "question": "Конверсия броней в сделки по каналам за 2026 год: число броней, число перешедших в сделку и процент конверсии с одним знаком, колонки в порядке: канал, брони, перешло в сделку, конверсия",
+    "reference_sql": "SELECT c.name AS channel, count(r.reservation_id) AS reservations, count(r.reservation_id) FILTER (WHERE r.status = 'converted') AS converted, round(100.0 * count(r.reservation_id) FILTER (WHERE r.status = 'converted') / nullif(count(r.reservation_id), 0), 1) AS conversion_pct FROM channels c LEFT JOIN reservations r ON r.channel_id = c.channel_id AND r.reserved_at >= DATE '2026-01-01' AND r.reserved_at < DATE '2027-01-01' GROUP BY c.name ORDER BY conversion_pct DESC"
+  },
+  {
+    "id": "reserv-active-by-object",
+    "level": 3,
+    "question": "По объектам, где сейчас есть активные брони: сколько активных броней и на какую сумму в млн рублей, один знак, колонки в порядке: объект, активные брони, сумма",
+    "reference_sql": "SELECT o.name AS object, count(*) AS active_reservations, round(sum(r.price) / 1e6, 1) AS reserved_mln FROM reservations r JOIN units u ON u.unit_id = r.unit_id JOIN buildings b ON b.building_id = u.building_id JOIN objects o ON o.object_id = b.object_id WHERE r.status = 'active' GROUP BY o.name ORDER BY active_reservations DESC"
+  },
+  {
+    "id": "reserv-expired-share-by-channel-2026",
+    "level": 3,
+    "question": "Доля сгоревших броней по каналам за 2026 год в процентах с одним знаком",
+    "reference_sql": "SELECT c.name AS channel, round(100.0 * count(r.reservation_id) FILTER (WHERE r.status = 'expired') / nullif(count(r.reservation_id), 0), 1) AS expired_pct FROM channels c LEFT JOIN reservations r ON r.channel_id = c.channel_id AND r.reserved_at >= DATE '2026-01-01' AND r.reserved_at < DATE '2027-01-01' GROUP BY c.name ORDER BY expired_pct DESC"
   }
 ]

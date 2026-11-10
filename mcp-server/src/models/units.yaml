@@ -61,7 +61,7 @@ measures:
     type: simple
     sql: "COUNT(*) FILTER (WHERE units.status = 'sold')"
     synonyms: ["продано квартир (по статусу)"]
-    notes: "Это статус в справочнике units, а не число сделок в sales. Для числа сделок используй меру deals из модели sales."
+    notes: "Это статус в справочнике units, а не число сделок в sales. Для числа сделок используй меру deals из модели sales. Для истории бронирований (кто, когда, по какой цене, перешла ли в сделку) используй модель reservations."
   - name: total_area
     label: "Общая площадь квартир, кв. м"
     type: simple

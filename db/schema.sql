@@ -1,10 +1,11 @@
 -- ============================================================
 -- Схема БД для дашбордов застройщика
 -- Справочники: objects, buildings, units, channels, dim_date
--- Факты: construction_progress, sales, sales_plan, cashflow
+-- Факты: construction_progress, sales, reservations, sales_plan, cashflow
 -- ============================================================
 SET client_encoding = 'UTF8';
 
+DROP TABLE IF EXISTS reservations        CASCADE;
 DROP TABLE IF EXISTS cashflow              CASCADE;
 DROP TABLE IF EXISTS sales_plan            CASCADE;
 DROP TABLE IF EXISTS sales                 CASCADE;
@@ -88,6 +89,18 @@ CREATE TABLE sales (
     contract     TEXT NOT NULL              -- ДДУ / Уступка права / Рассрочка
 );
 
+-- Брони: история бронирований квартир (одна строка = одно событие брони)
+CREATE TABLE reservations (
+    reservation_id SERIAL PRIMARY KEY,
+    unit_id        INT NOT NULL REFERENCES units(unit_id),
+    channel_id     INT NOT NULL REFERENCES channels(channel_id),  -- кто привлёк
+    reserved_at    DATE NOT NULL,              -- дата бронирования
+    expires_at     DATE NOT NULL,              -- плановая дата сгорания
+    price          NUMERIC(14,2) NOT NULL,     -- цена брони (цена квартиры на момент)
+    status         TEXT NOT NULL DEFAULT 'active',  -- active / converted / expired / cancelled
+    sale_id        INT REFERENCES sales(sale_id)     -- сделка, если перешла; NULL иначе
+);
+
 -- План продаж: помесячно по корпусам и каналам
 CREATE TABLE sales_plan (
     plan_id      SERIAL PRIMARY KEY,
@@ -119,5 +132,9 @@ CREATE INDEX idx_units_status      ON units(status);
 CREATE INDEX idx_progress_bld_m    ON construction_progress(building_id, month);
 CREATE INDEX idx_sales_date        ON sales(sale_date);
 CREATE INDEX idx_sales_channel     ON sales(channel_id);
+CREATE INDEX idx_reserv_unit       ON reservations(unit_id);
+CREATE INDEX idx_reserv_channel    ON reservations(channel_id);
+CREATE INDEX idx_reserv_status     ON reservations(status);
+CREATE INDEX idx_reserv_date       ON reservations(reserved_at);
 CREATE INDEX idx_sales_plan_bld_m  ON sales_plan(building_id, month);
 CREATE INDEX idx_cashflow_obj_m    ON cashflow(object_id, month);

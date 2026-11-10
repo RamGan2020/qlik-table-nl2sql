@@ -1,0 +1,115 @@
+name: reservations
+label: "Бронирования"
+description: "История бронирований квартир: одна строка = одно событие брони (активная, сгоревшая, отменённая или перешедшая в сделку). Остаток в брони по статусам — в модели units (меры reserved_units), здесь — событийная история. Счётчики мер целочисленные: доли в процентах строй как 100.0 * <числитель> / <знаменатель> — умножение на 100.0 строго ДО деления, иначе целочисленное деление обнулит дробную часть."
+physical:
+  table: reservations
+  primary_key: reservation_id
+dimensions:
+  - name: reservation_id
+    label: "Идентификатор брони"
+    type: integer
+  - name: unit_id
+    label: "Идентификатор квартиры"
+    type: integer
+  - name: unit
+    label: "Квартира (номер)"
+    type: string
+    sql: "units.unit_number"
+    requires_join: ["units"]
+    synonyms: ["лот", "номер квартиры"]
+  - name: building
+    label: "Корпус"
+    type: string
+    sql: "buildings.name"
+    requires_join: ["units", "buildings"]
+    synonyms: ["дом", "корпус"]
+  - name: object
+    label: "Объект (ЖК)"
+    type: string
+    sql: "objects.name"
+    requires_join: ["units", "buildings", "objects"]
+    synonyms: ["жилой комплекс", "ЖК", "объект", "проект"]
+  - name: channel
+    label: "Канал, приведший бронь"
+    type: string
+    sql: "channels.name"
+    requires_join: ["channels"]
+    synonyms: ["канал", "источник", "кто привёл"]
+  - name: reserved_at
+    label: "Дата бронирования"
+    type: date
+    synonyms: ["когда забронировали", "дата брони"]
+  - name: expires_at
+    label: "Бронь действует до (плановое сгорание)"
+    type: date
+    synonyms: ["сгорание брони", "окончание брони", "действует до"]
+  - name: month
+    label: "Месяц брони"
+    type: string
+    sql: "to_char(date_trunc('month', reservations.reserved_at), 'YYYY-MM')"
+    synonyms: ["месяц", "помесячно"]
+  - name: status
+    label: "Статус брони"
+    type: string
+    synonyms: ["active/converted/expired/cancelled", "активна/перешла в сделку/сгорела/отменена"]
+    domain: ["active", "converted", "expired", "cancelled"]
+  - name: sale_id
+    label: "Идентификатор сделки (если бронь перешла)"
+    type: integer
+measures:
+  - name: reservations_count
+    label: "Количество бронирований"
+    type: simple
+    sql: "COUNT(*)"
+    synonyms: ["брони", "число бронирований", "сколько забронировали"]
+  - name: active_reservations
+    label: "Активные брони"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE reservations.status = 'active')"
+    synonyms: ["действующие брони", "в работе"]
+  - name: converted_reservations
+    label: "Брони, перешедшие в сделки"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE reservations.status = 'converted')"
+    synonyms: ["перешло в сделку", "конвертировалось", "брони-продажи"]
+    notes: "Переход = появление сделки в sales, sale_id заполнен. Для вопросов «сколько продаж выросло из броней» используй эту меру, а не deals из sales."
+  - name: expired_reservations
+    label: "Сгоревшие брони"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE reservations.status = 'expired')"
+    synonyms: ["сгорело", "просроченные брони"]
+  - name: cancelled_reservations
+    label: "Отменённые брони"
+    type: simple
+    sql: "COUNT(*) FILTER (WHERE reservations.status = 'cancelled')"
+    synonyms: ["отменено", "аннулированные брони"]
+  - name: conversion_pct
+    label: "Конверсия броней в сделки, %"
+    type: ratio
+    numerator_sql: "100.0 * COUNT(*) FILTER (WHERE reservations.status = 'converted')"
+    denominator_sql: "NULLIF(COUNT(*), 0)"
+    synonyms: ["доля конверсии", "конверсия броней", "успех броней"]
+    notes: "По всем броням за период. Активные (active) в знаменателе есть; для конверсии только завершённых броней фильтруй status IN ('converted','expired','cancelled')."
+  - name: expired_share_pct
+    label: "Доля сгоревших броней, %"
+    type: ratio
+    numerator_sql: "100.0 * COUNT(*) FILTER (WHERE reservations.status = 'expired')"
+    denominator_sql: "NULLIF(COUNT(*), 0)"
+    synonyms: ["доля сгоревших", "процент сгоревших", "сгоревшие в процентах"]
+    notes: "Доля в числе всех броней периода. Для доли среди завершённых (без активных) фильтруй status IN ('converted','expired','cancelled')."
+  - name: reserved_value
+    label: "Сумма забронированного"
+    type: simple
+    sql: "SUM(reservations.price)"
+    synonyms: ["забронировано на", "объём броней", "цена броней"]
+  - name: avg_reserved_price
+    label: "Средняя цена брони"
+    type: simple
+    sql: "AVG(reservations.price)"
+    synonyms: ["средний чек брони", "в среднем забронировали на"]
+  - name: avg_reservation_days
+    label: "Средний срок брони, дней"
+    type: simple
+    sql: "AVG(reservations.expires_at - reservations.reserved_at)"
+    synonyms: ["сколько дней держат бронь", "срок действия брони"]
+    notes: "Плановый срок (reserved_at -> expires_at), фактический срок конвертировавшихся считай по sale_date из sales."

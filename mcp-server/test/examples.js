@@ -28,7 +28,7 @@ function expect(cond, name, detail = '') {
 {
   const get = createExamplesLoader(realFile);
   const loaded = get();
-  expect(loaded.list.length === 40, 'реальный questions.json: 40 примеров', `получено ${loaded.list.length}`);
+  expect(loaded.list.length >= 40, 'реальный questions.json: не меньше 40 примеров', `получено ${loaded.list.length}`);
   const block = renderExamplesBlock(loaded);
   expect(block.includes('ПРИМЕРЫ ВОПРОСОВ'), 'блок начинается с заголовка');
   expect(block.includes('Число сделок по каналам продаж за 2026 год'), 'блок содержит вопрос первого кейса');
