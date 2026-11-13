@@ -97,6 +97,13 @@ measures:
     denominator_sql: "NULLIF(COUNT(*), 0)"
     synonyms: ["доля сгоревших", "процент сгоревших", "сгоревшие в процентах"]
     notes: "Доля в числе всех броней периода. Для доли среди завершённых (без активных) фильтруй status IN ('converted','expired','cancelled')."
+  - name: cancelled_share_pct
+    label: "Доля отменённых броней, %"
+    type: ratio
+    numerator_sql: "100.0 * COUNT(*) FILTER (WHERE reservations.status = 'cancelled')"
+    denominator_sql: "NULLIF(COUNT(*), 0)"
+    synonyms: ["доля отменённых", "процент отменённых", "отменённые в процентах"]
+    notes: "Доля в числе всех броней периода. Для доли среди завершённых (без активных) фильтруй status IN ('converted','expired','cancelled')."
   - name: reserved_value
     label: "Сумма забронированного"
     type: simple
