@@ -62,20 +62,53 @@ try {
   err('relationships.yaml', `не парсится: ${e.message}`);
 }
 
+const modelTables = new Set(models.map((m) => m.physical?.table).filter(Boolean));
 const relatedTables = new Set();
-for (const r of relationships) {
+for (const [i, r] of relationships.entries()) {
+  const where = `relationships.yaml · связь #${i + 1} (${r.from} -> ${r.to})`;
   for (const side of [r.from, r.to]) {
-    const t = String(side ?? '').split('.')[0];
-    if (t) relatedTables.add(t);
+    const s = String(side ?? '');
+    if (!/^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$/.test(s)) {
+      err(where, `сторона "${s}" должна быть в формате "таблица.колонка"`);
+      continue;
+    }
+    const t = s.split('.')[0];
+    relatedTables.add(t);
+    if (!modelTables.has(t)) err(where, `таблица "${t}" не совпадает ни с одной моделью (physical.table)`);
+  }
+  if (r.role !== 'calendar' && r.type !== 'many_to_one' && r.type !== 'one_to_many') {
+    err(where, 'type обязателен: many_to_one или one_to_many (без него компилятор не защитит запрос от fanout)');
   }
 }
 
 // ---------- статические проверки ----------
 
 const seenModelNames = new Map();
+const aliasOwners = new Map();
+const tableOwners = new Map();
 function checkFragment(where, sql) {
   const r = parse(`SELECT ${sql}`, PG);
   if (!r.success) err(where, `SQL-фрагмент не парсится: "${sql}" (${r.error})`);
+}
+
+// Таблицы, на которые ссылается фрагмент: "table." вне строковых литералов.
+const tableRefRe = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\./g;
+function sqlRefs(sql) {
+  const stripped = String(sql).replace(/'(?:[^']|'')*'/g, "''");
+  return [...stripped.matchAll(tableRefRe)].map((m) => m[1]);
+}
+
+function checkSqlRefs(where, sql) {
+  checkFragment(where, sql);
+  for (const t of sqlRefs(sql)) {
+    if (!modelTables.has(t)) err(where, `SQL-фрагмент ссылается на таблицу "${t}", которой нет среди моделей: "${sql}"`);
+  }
+}
+
+function checkRefsOnly(where, sql) {
+  for (const t of sqlRefs(sql)) {
+    if (!modelTables.has(t)) err(where, `ссылка на таблицу "${t}", которой нет среди моделей: "${sql}"`);
+  }
 }
 
 for (const m of models) {
@@ -84,6 +117,19 @@ for (const m of models) {
   if (!m.physical?.table) err(where, `модель "${m.name}": нет physical.table`);
   if (seenModelNames.has(m.name)) err(where, `имя модели "${m.name}" уже занято файлом ${seenModelNames.get(m.name)}`);
   seenModelNames.set(m.name, where);
+  const tbl = m.physical?.table;
+  if (tbl) {
+    if (tableOwners.has(tbl)) err(where, `таблица "${tbl}" уже описана моделью ${tableOwners.get(tbl)}`);
+    tableOwners.set(tbl, `модель "${m.name}"`);
+  }
+  const alias = m.physical?.alias;
+  if (alias) {
+    if (!/^[a-z][a-z0-9]*$/.test(alias)) err(where, `physical.alias "${alias}": только латиница в нижнем регистре и цифры, начало с буквы`);
+    if (aliasOwners.has(alias)) err(where, `алиас "${alias}" уже занят (${aliasOwners.get(alias)})`);
+    aliasOwners.set(alias, `модель "${m.name}"`);
+  } else if (tbl) {
+    warn(where, `нет physical.alias: алиас таблицы "${tbl}" выведется автоматически и может смениться при добавлении таблиц — задайте явный alias`);
+  }
 
   const names = new Map(); // каноническое имя -> что это
   const syns = new Map(); // синоним (lower) -> владелец
@@ -95,7 +141,7 @@ for (const m of models) {
     if (d.type && !DIM_TYPES.has(d.type)) err(w, `неизвестный type "${d.type}"`);
     if (names.has(d.name)) err(w, `имя "${d.name}" уже занято (${names.get(d.name)})`);
     names.set(d.name, reg('измерение', d.name));
-    if (d.sql) checkFragment(w, d.sql);
+    if (d.sql) checkSqlRefs(w, d.sql);
     for (const t of d.requires_join ?? []) {
       if (!relatedTables.has(t)) err(w, `requires_join: таблица "${t}" не фигурирует в relationships.yaml`);
     }
@@ -115,14 +161,16 @@ for (const m of models) {
 
     if ((me.type ?? 'simple') === 'ratio') {
       if (!me.numerator_sql || !me.denominator_sql) err(w, 'ratio требует numerator_sql и denominator_sql');
-      if (me.numerator_sql) checkFragment(w, me.numerator_sql);
-      if (me.denominator_sql) checkFragment(w, me.denominator_sql);
+      if (me.numerator_sql) checkSqlRefs(w, me.numerator_sql);
+      if (me.denominator_sql) checkSqlRefs(w, me.denominator_sql);
     } else {
       if (!me.sql) err(w, `нет sql (type "${me.type ?? 'simple'}")`);
-      else checkFragment(w, me.sql);
+      else checkSqlRefs(w, me.sql);
     }
     if (me.type === 'latest_snapshot') {
       if (!me.snapshot_key || !me.order_by) err(w, 'latest_snapshot требует snapshot_key и order_by');
+      if (me.snapshot_key) checkRefsOnly(w, me.snapshot_key);
+      if (me.order_by) checkRefsOnly(w, me.order_by);
     }
     for (const t of me.requires_join ?? []) {
       if (!relatedTables.has(t)) err(w, `requires_join: таблица "${t}" не фигурирует в relationships.yaml`);

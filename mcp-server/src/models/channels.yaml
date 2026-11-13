@@ -4,6 +4,7 @@ description: "Справочник каналов продаж."
 physical:
   table: channels
   primary_key: channel_id
+  alias: c
 dimensions:
   - name: channel_id
     label: "Идентификатор канала"

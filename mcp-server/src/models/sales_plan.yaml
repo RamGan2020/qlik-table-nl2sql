@@ -4,6 +4,7 @@ description: "Помесячный план продаж по корпусам �
 physical:
   table: sales_plan
   primary_key: plan_id
+  alias: sp
 dimensions:
   - name: plan_id
     label: "Идентификатор строки плана"

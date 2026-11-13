@@ -4,6 +4,7 @@ description: "Транзакционный факт продаж: одна ст�
 physical:
   table: sales
   primary_key: sale_id
+  alias: s
 dimensions:
   - name: sale_id
     label: "Идентификатор сделки"

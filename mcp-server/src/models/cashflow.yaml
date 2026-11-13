@@ -4,6 +4,7 @@ description: "Помесячное движение денежных средс�
 physical:
   table: cashflow
   primary_key: cashflow_id
+  alias: cf
 dimensions:
   - name: cashflow_id
     label: "Идентификатор записи"

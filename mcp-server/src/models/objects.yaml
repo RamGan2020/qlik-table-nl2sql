@@ -4,6 +4,7 @@ description: "Жилой комплекс (ЖК) — верхний уровен
 physical:
   table: objects
   primary_key: object_id
+  alias: o
 dimensions:
   - name: object_id
     label: "Идентификатор ЖК"

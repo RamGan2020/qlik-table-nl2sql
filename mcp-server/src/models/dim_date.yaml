@@ -4,6 +4,7 @@ description: "Календарь 2023–2028 для корректной агр�
 physical:
   table: dim_date
   primary_key: date_id
+  alias: d
 dimensions:
   - name: date_id
     label: "Дата"

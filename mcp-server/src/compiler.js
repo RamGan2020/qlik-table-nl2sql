@@ -16,29 +16,72 @@
 
 import { parse, generate, Dialect, ast } from '@polyglot-sql/sdk';
 
-// Фиксированные алиасы таблиц (детерминизм + совместимость с примерами).
-export const ALIASES = {
-  objects: 'o',
-  buildings: 'b',
-  channels: 'c',
-  units: 'u',
-  sales: 's',
-  sales_plan: 'sp',
-  construction_progress: 'p',
-  cashflow: 'cf',
-  dim_date: 'd',
-  reservations: 'r',
-};
-
 const PG = Dialect.PostgreSQL;
-const fragCache = new Map(); // фрагмент -> переписанный с алиасами (процесс живёт долго, кэш ок)
+const fragCache = new Map(); // фрагмент -> переписанный с алиасами (сбрасывается при смене карты алиасов)
+
+// Активная карта алиасов: физическая таблица -> алиас. Источник — сами модели:
+// предпочтительный алиас объявляется в YAML (physical.alias); без него алиас
+// выводится детерминированно из имени таблицы. Компилятор не знает ни одной
+// таблицы поимённо. Карта пересчитывается на входе compilePlan; результат
+// детерминирован (явные алиасы + сортировка), поэтому один план -> один SQL
+// независимо от того, какие ещё запросы компилировались в этом процессе.
+let ACTIVE_ALIASES = {};
+
+function computeAliases(semantic) {
+  const tables = new Set();
+  const out = {};
+  const used = new Set();
+  for (const m of semantic?.models ?? []) {
+    const t = m.physical?.table;
+    if (!t) continue;
+    tables.add(t);
+    const a = m.physical?.alias;
+    if (a && !out[t]) {
+      out[t] = a;
+      used.add(a);
+    }
+  }
+  for (const r of semantic?.relationships ?? []) {
+    for (const side of [r.from, r.to]) {
+      const t = String(side ?? '').split('.')[0];
+      if (t) tables.add(t);
+    }
+  }
+  for (const t of [...tables].sort()) {
+    if (out[t]) continue;
+    const base = t.toLowerCase().replace(/[^a-z0-9]/g, '') || 't';
+    let alias = '';
+    for (let len = 1; len <= base.length; len++) {
+      const candidate = base.slice(0, len);
+      if (!used.has(candidate)) {
+        alias = candidate;
+        break;
+      }
+    }
+    if (!alias) {
+      let i = 2;
+      while (used.has(`${base[0]}${i}`)) i++;
+      alias = `${base[0]}${i}`;
+    }
+    out[t] = alias;
+    used.add(alias);
+  }
+  return out;
+}
+
+function setActiveAliases(map) {
+  if (JSON.stringify(map) !== JSON.stringify(ACTIVE_ALIASES)) {
+    fragCache.clear(); // кэш фрагментов держит алиасы — смена карты его инвалидирует
+    ACTIVE_ALIASES = map;
+  }
+}
 
 /** SQL-фрагмент с именами таблиц -> тот же фрагмент с алиасами. */
 function rewriteFragment(sql) {
   if (fragCache.has(sql)) return fragCache.get(sql);
   const r = parse(`SELECT ${sql}`, PG);
   if (!r.success) throw new Error(`фрагмент не парсится: "${sql}" (${r.error})`);
-  const renamed = ast.renameTables(r.ast[0], ALIASES);
+  const renamed = ast.renameTables(r.ast[0], ACTIVE_ALIASES);
   const g = generate([renamed], PG);
   if (!g.success || !g.sql?.[0]) throw new Error(`фрагмент не компилируется: "${sql}" (${g.error})`);
   const out = g.sql[0].replace(/^SELECT\s+/i, '');
@@ -49,7 +92,7 @@ function rewriteFragment(sql) {
 /** "sales.unit_id" -> "s.unit_id" */
 function qualifyRef(tableCol) {
   const [t, c] = String(tableCol).split('.');
-  return `${ALIASES[t] ?? t}.${c}`;
+  return `${ACTIVE_ALIASES[t] ?? t}.${c}`;
 }
 
 /** AST-проверка и канонический рендер. Бросает Error при синтаксической ошибке. */
@@ -238,17 +281,20 @@ function renderModelCondition(f, model, resolved) {
 // ---------- джойны: BFS по реестру связей ----------
 
 function buildAdjacency(relationships) {
-  const adj = new Map(); // table -> [{table, from, to}]
-  const addEdge = (a, b, from, to) => {
+  const adj = new Map(); // table -> [{table, from, to, manyTable}]
+  const addEdge = (a, b, from, to, manyTable) => {
     if (!adj.has(a)) adj.set(a, []);
-    adj.get(a).push({ table: b, from, to });
+    adj.get(a).push({ table: b, from, to, manyTable });
   };
   for (const r of relationships ?? []) {
     const [ft] = String(r.from).split('.');
     const [tt] = String(r.to).split('.');
     if (r.role === 'calendar') continue; // календарные рёбра — не путь обхода
-    addEdge(ft, tt, r.from, r.to);
-    addEdge(tt, ft, r.from, r.to); // равенство симметрично
+    // сторона "многих": джойн ОТ "одного" К "многим" умножит строки запроса
+    // (fanout — агрегаты задвоятся). Тип не задан — проверять нечем.
+    const manyTable = r.type === 'many_to_one' ? ft : r.type === 'one_to_many' ? tt : null;
+    addEdge(ft, tt, r.from, r.to, manyTable);
+    addEdge(tt, ft, r.from, r.to, manyTable); // равенство симметрично
   }
   for (const list of adj.values()) list.sort((a, b) => a.table.localeCompare(b.table));
   return adj;
@@ -258,13 +304,15 @@ function buildAdjacency(relationships) {
  * Список джойнов: кратчайшие пути от факта к каждой требуемой таблице,
  * развёрнутые в рёбра; промежуточные таблицы пути включаются автоматически,
  * побочные ветви обхода — нет. Детерминировано.
+ * Джойн "от одного ко многим" относительно запроса — отказ (fanout): каждая
+ * строка факта размножилась бы, а агрегаты перестали бы сходиться.
  */
 function resolveJoins(fact, required, relationships) {
   const adj = buildAdjacency(relationships);
   const targets = [...required].filter((t) => t !== fact).sort();
   if (!targets.length) return [];
 
-  const prev = new Map(); // table -> {parent, from, to}
+  const prev = new Map(); // table -> {parent, from, to, manyTable}
   const visited = new Set([fact]);
   let frontier = [fact];
   while (frontier.length) {
@@ -273,7 +321,7 @@ function resolveJoins(fact, required, relationships) {
       for (const e of adj.get(cur) ?? []) {
         if (visited.has(e.table)) continue;
         visited.add(e.table);
-        prev.set(e.table, { parent: cur, from: e.from, to: e.to });
+        prev.set(e.table, { parent: cur, from: e.from, to: e.to, manyTable: e.manyTable });
         next.push(e.table);
       }
     }
@@ -294,10 +342,16 @@ function resolveJoins(fact, required, relationships) {
     let cur = t;
     while (cur !== fact) {
       const p = prev.get(cur);
-      path.unshift({ table: cur, from: p.from, to: p.to });
+      path.unshift({ table: cur, from: p.from, to: p.to, manyTable: p.manyTable });
       cur = p.parent;
     }
     for (const j of path) {
+      if (j.manyTable && j.manyTable === j.table) {
+        throw new Error(
+          `JOIN к "${j.table}" умножит строки запроса: по связи ${j.from} -> ${j.to} это переход "от одного ко многим" (fanout), ` +
+          `агрегаты задвоятся. Сделайте "${j.table}" моделью-фактом запроса или уберите её из требуемых джойнов.`,
+        );
+      }
       const [ft] = j.from.split('.');
       const [tt] = j.to.split('.');
       const key = ft < tt ? `${ft}|${tt}` : `${tt}|${ft}`;
@@ -422,9 +476,9 @@ function assembleModelQuery({ model, selectItems, where, groupBy, orderExprs = [
     return `${expr} AS ${i.alias}`;
   });
 
-  const parts = [`SELECT ${snapshotExpr ? `DISTINCT ON (${snapshotExpr}) ` : ''}${selectList.join(', ')}`, `FROM ${fact} AS ${ALIASES[fact]}`];
+  const parts = [`SELECT ${snapshotExpr ? `DISTINCT ON (${snapshotExpr}) ` : ''}${selectList.join(', ')}`, `FROM ${fact} AS ${ACTIVE_ALIASES[fact]}`];
   for (const j of joins) {
-    parts.push(`JOIN ${j.table} AS ${ALIASES[j.table]} ON ${qualifyRef(j.from)} = ${qualifyRef(j.to)}`);
+    parts.push(`JOIN ${j.table} AS ${ACTIVE_ALIASES[j.table]} ON ${qualifyRef(j.from)} = ${qualifyRef(j.to)}`);
   }
   if (wheres.length) parts.push(`WHERE ${wheres.join(' AND ')}`);
   if (groupExprs.length) parts.push(`GROUP BY ${groupExprs.join(', ')}`);
@@ -490,6 +544,7 @@ function renderAliasedCondition(f, entity, model, refAlias) {
  * Возвращает детерминированный SQL (PostgreSQL). Бросает Error с причиной отказа.
  */
 export function compilePlan(plan, semantic) {
+  setActiveAliases(computeAliases(semantic));
   if (plan.with?.length) return compileWithPlan(plan, semantic);
   const model = findModel(semantic, plan.from);
 

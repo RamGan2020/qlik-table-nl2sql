@@ -4,6 +4,7 @@ description: "История бронирований квартир: одна �
 physical:
   table: reservations
   primary_key: reservation_id
+  alias: r
 dimensions:
   - name: reservation_id
     label: "Идентификатор брони"

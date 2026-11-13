@@ -4,6 +4,7 @@ description: "Квартира (лот) — единица продажи."
 physical:
   table: units
   primary_key: unit_id
+  alias: u
 dimensions:
   - name: unit_id
     label: "Идентификатор квартиры"

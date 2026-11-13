@@ -4,6 +4,7 @@ description: "Корпус (дом) в составе ЖК."
 physical:
   table: buildings
   primary_key: building_id
+  alias: b
 dimensions:
   - name: building_id
     label: "Идентификатор корпуса"

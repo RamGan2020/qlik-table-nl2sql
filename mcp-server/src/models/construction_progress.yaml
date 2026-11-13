@@ -4,6 +4,7 @@ description: "Помесячные срезы готовности и затра
 physical:
   table: construction_progress
   primary_key: progress_id
+  alias: p
 dimensions:
   - name: progress_id
     label: "Идентификатор записи"
