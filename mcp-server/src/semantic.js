@@ -60,9 +60,9 @@ function renderMeasure(me) {
   if (me.type === 'ratio') formula = `${me.numerator_sql} / ${me.denominator_sql}`;
   const parts = [`мера ${me.name} = ${formula} — ${me.label}.`];
   if (me.synonyms?.length) parts.push(`Синонимы: ${me.synonyms.join(', ')}.`);
-  if (me.requires_join?.length) parts.push(`Требует JOIN: ${me.requires_join.join(', ')} (иначе area недоступна).`);
+  if (me.requires_join?.length) parts.push(`Требует JOIN: ${me.requires_join.join(', ')}.`);
   if (me.type === 'latest_snapshot') {
-    parts.push(`Срез: значение "${me.sql}" за последний месяц внутри каждого "${me.snapshot_key}" (ORDER BY ${me.order_by}); реализуй через DISTINCT ON (${me.snapshot_key}) или подзапрос с max(month).`);
+    parts.push(`Тип "последний срез": актуальное значение "${me.sql}" внутри каждого "${me.snapshot_key}" (по ${me.order_by}). Выбирай эту меру для вопросов про текущее состояние; по месяцам её не суммировать и не усреднять.`);
   }
   if (me.notes) parts.push(`Важно: ${me.notes}`);
   return '- ' + parts.join(' ');
@@ -82,7 +82,8 @@ export function renderSemanticBlock(semantic) {
       const dims = m.dimensions.map((d) => {
         const syn = d.synonyms?.length ? ` [синонимы: ${d.synonyms.join(', ')}]` : '';
         const domain = d.domain?.length ? ` {значения: ${d.domain.map((v) => JSON.stringify(v)).join(', ')}}` : '';
-        return `${d.name} (${d.type}) — ${d.label}${syn}${domain}`;
+        const notes = d.notes ? ` Важно: ${d.notes}` : '';
+        return `${d.name} (${d.type}) — ${d.label}${syn}${domain}${notes}`;
       });
       L.push(`Измерения: ${dims.join('; ')}.`);
     }

@@ -36,7 +36,7 @@ dimensions:
     label: "Месяц плана"
     type: date
     synonyms: ["месяц", "период плана"]
-    # первое число месяца
+    notes: "Первое число месяца."
 measures:
   - name: planned_revenue
     label: "Плановая выручка"
