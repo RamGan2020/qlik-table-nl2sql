@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "test": "node test/ir.js && node test/parse-llm.js && node test/compiler.js && node test/compiler-v2.js && node test/examples.js && node test/validate-joins.js && node test/smoke.js",
     "eval": "node eval/run.js",
-    "eval:check-refs": "node eval/run.js --check-refs"
+    "eval:check-refs": "node eval/run.js --check-refs",
+    "check-models": "node scripts/check-models.js"
   },
   "engines": {
     "node": ">=18"
