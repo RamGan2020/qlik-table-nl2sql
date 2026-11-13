@@ -556,8 +556,8 @@ function compileWithPlan(plan, semantic) {
         if (ownerA && curHas(b)) return `${ownerA}.${a} = ${j.cte}.${b}`;
         if (ownerB && curHas(a)) return `${ownerB}.${b} = ${j.cte}.${a}`;
         throw new Error(
-          `join ${j.cte}: пара [${a}, ${b}] не разрешается — проверь имена колонок ` +
-          `(уже введены: ${[...introduced].map((n) => `${n}(${[...cteCols.get(n)].join(',')})`).join(' ')}; в ${j.cte}: ${[...cteCols.get(j.cte)].join(',')})`,
+          `join ${j.cte}: пара [${a}, ${b}] не разрешается — в join.on указывай АЛИАСЫ колонок ` +
+          `из select подпланов, а не ref измерений (уже введены: ${[...introduced].map((n) => `${n}(${[...cteCols.get(n)].join(',')})`).join(' ')}; в ${j.cte}: ${[...cteCols.get(j.cte)].join(',')})`,
         );
       });
       joinSqls.push(`${JOIN_TYPE[type]} ${j.cte} ON ${conds.join(' AND ')}`);
