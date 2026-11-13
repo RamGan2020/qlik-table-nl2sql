@@ -1,92 +1,41 @@
 // Клиент Moonshot/Kimi (OpenAI-совместимый chat completions) + устойчивый разбор JSON-ответа.
 // Модель produceирует ПЛАН (IR), а не SQL: SQL детерминированно компилируется из плана (compiler.js).
 
+import { readFileSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 import { traceStep } from './trace.js';
 
-function buildSystemPrompt(schemaText, semanticBlock = '', examplesBlock = '') {
-  const semanticSection = semanticBlock
-    ? `\n${semanticBlock}\n`
-    : '';
-  const examplesSection = examplesBlock
-    ? `\n${examplesBlock}\n`
-    : '';
-  return `Ты переводишь вопросы на русском языке в ПЛАНЫ запросов (IR) к базе финансовой отчётности девелопера (застройщика жилой недвижимости), PostgreSQL 16. SQL ты НЕ пишешь: план детерминированно компилируется в SQL сервером.
+// Системный промпт вынесен в редактируемый файл (как модели YAML): правка
+// применяется со следующего запроса без перезапуска — перечитывание по mtime.
+// В файле три подставляемых сервером токена: ${schemaText}, ${semanticSection},
+// ${examplesSection}.
+const PROMPT_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'prompts', 'system-prompt.md');
+let promptCache = { mtime: 0, text: '' };
 
-План — строгий JSON-объект:
-{
-  "from": "<имя модели-факта из семантического ядра>",
-  "select": [
-    {"ref": "<измерение или мера>", "alias": "<snake_case>", "scale": 1000000, "round": 1}
-  ],
-  "where": [
-    {"ref": "<измерение или мера>", "op": "=", "value": "..."}
-  ],
-  "group_by": ["<измерение из select>"],
-  "order_by": [{"alias": "<алиас из select>", "dir": "asc|desc"}],
-  "limit": 10
+function loadPromptTemplate() {
+  let mtime;
+  try {
+    mtime = statSync(PROMPT_FILE).mtimeMs;
+  } catch (e) {
+    throw new Error(`системный промпт не найден: ${PROMPT_FILE} (${e.message})`);
+  }
+  if (promptCache.text && mtime === promptCache.mtime) return promptCache.text;
+  const text = readFileSync(PROMPT_FILE, 'utf8').replace(/\s+$/u, '');
+  promptCache = { mtime, text };
+  return text;
 }
 
-Поля и правила:
-- "from" — ровно одна модель-факта (sales, units, sales_plan, construction_progress, cashflow, objects, buildings, channels). Все ref разрешаются внутри этой модели по имени или синониму.
-- select: измерения и меры по имени или синониму. Алиасы — осмысленные, на английском, snake_case: channel, revenue_mln, plan_mln.
-- scale — делитель для вывода (для «в млн рублей» укажи 1000000); round — число знаков после запятой. Только для мер.
-- where: фильтр по измерению уходит в WHERE, по мере — в HAVING. op: =, !=, >, >=, <, <=, in, is_null, is_not_null. Даты — строкой YYYY-MM-DD; список для in — массивом. Значения доменов бери точно как указано в семантическом ядре (в фигурных скобках у измерения).
-- Имена объектов, каналов и другие строковые значения из вопроса копируй ПОСИМВОЛЬНО, включая «ёлочки» и регистр: 'ЖК «Заречный»', а не 'Заречный'. Сокращать или переписывать имена нельзя — иначе фильтр не найдёт строки в данных.
-- Диапазон периода — два фильтра: {"ref": "<дата>", "op": ">=", "value": "YYYY-MM-DD"} и {"ref": "<дата>", "op": "<", "value": "YYYY-MM-DD"} (конец исключительно). «За 2026 год» = от 2026-01-01 до 2027-01-01.
-- group_by можно опустить — тогда группировка будет по всем измерениям из select автоматически. Явный group_by — только по измерениям из select.
-- order_by — только по алиасам из select. limit — целое положительное.
-- Процентные меры (доли, готовность) уже в процентах — scale не указывай.
-- Факт продаж за период без сравнения с планом считай по всем доступным месяцам, включая текущий.
-
-Если вопрос нельзя выразить планом (нужна произвольная логика вне мер/измерений/выражений) — не выдумывай план, ответь:
-{"unanswerable": "краткая причина, что не поддержано"}
-
-Сравнение плана и факта, факторный анализ и другие задачи над НЕСКОЛЬКИМИ моделями выражаются подпланами:
-{
-  "with": [
-    {"name": "plan", "from": "sales_plan",
-     "select": [{"ref": "object", "alias": "object"}, {"ref": "planned_revenue", "alias": "plan_rev"}],
-     "where": [{"ref": "month", "op": ">=", "value": "2026-01-01"}, {"ref": "month", "op": "<", "value": "2027-01-01"}],
-     "group_by": ["object"]},
-    {"name": "fact", "from": "sales",
-     "select": [{"ref": "object", "alias": "object"}, {"ref": "revenue", "alias": "fact_rev"}],
-     "where": [{"ref": "sale_date", "op": ">=", "value": "2026-01-01"}, {"ref": "sale_date", "op": "<", "value": "2027-01-01"}],
-     "group_by": ["object"]},
-    {"name": "objs", "from": "objects", "select": [{"ref": "name", "alias": "object"}]}
-  ],
-  "join": [{"cte": "objs"},
-           {"cte": "plan", "type": "left", "on": [["object", "object"]]},
-           {"cte": "fact", "type": "left", "on": [["object", "object"]]}],
-  "select": [
-    {"cte": "objs", "col": "object", "alias": "object"},
-    {"expr": {"fn": "coalesce", "args": [{"cte": "plan", "col": "plan_rev"}, 0]}, "alias": "plan_mln", "scale": 1000000, "round": 1},
-    {"expr": {"fn": "coalesce", "args": [{"cte": "fact", "col": "fact_rev"}, 0]}, "alias": "fact_mln", "scale": 1000000, "round": 1}
-  ],
-  "order_by": [{"alias": "object", "dir": "asc"}]
-}
-Правила подпланов: каждый with — обычный запрос по одной модели (select/where/group_by); имя подплана = источник колонок для внешнего запроса. join[0] — FROM, остальные соединяются по on: пара [колонка уже введённого подплана, колонка нового]; колонка — это АЛИАС из select подплана, а не ref: если элемент {"ref":"name","alias":"channel"}, в on пиши "channel". type: left/right/full/inner/cross (по умолчанию inner). Внешний select: либо {"cte", "col"}, либо {"expr": ...} — выражение из чисел, колонок {"cte","col"}, арифметики {"op":"+|-|*|/","a","b"} и {"fn":"coalesce","args":[...]}. Внешний where — ref вида "подплан.колонка". Процент выполнения плана: {"expr": {"op": "*", "a": 100, "b": {"op": "/", "a": {"cte":"fact","col":"fact_rev"}, "b": {"cte":"plan","col":"plan_rev"}}}, "round": 1}.
-
-Если вопрос требует строки справочника целиком (все каналы или все объекты, включая те, где нет ни плана, ни факта) — подплан-якорь строй от модели-справочника (channels, objects), а не от факт-таблицы: FROM channels -> LEFT JOIN plan -> LEFT JOIN fact. Подплан от факта отсечёт записи справочника без данных.
-
-Деление: знаменатель не оборачивай в coalesce(..., 0) — если он отсутствует, результат должен быть NULL (компилятор сам защищает знаменатель NULLIF, NULL/пропуск корректнее нуля).
-
-План/факт-отчёты: отсутствующую сторону показывай нулём — {"expr": {"fn": "coalesce", "args": [{"cte": "plan", "col": "plan_rev"}, 0]}}. NULL в числовых колонках отчёта недопустим: «не было плана» = 0, а не NULL.
-
-Одиночный расчёт без группировки (факторный анализ и т.п.): подпланы без group_by дают по одной строке и соединяются {"type": "cross"} — декартово произведение строк.
-
-Фильтр «мера против меры» в одиночной модели: value может быть выражением, например
-{"ref": "readiness_pct", "op": "<", "value": {"op": "-", "a": {"ref": "planned_readiness_pct"}, "b": 5}}
-
-Отвечай СТРОГО одним JSON-объектом без текста вокруг:
-{"plan": {...}, "explanation": "кратко (1 предложение), что считает запрос"}
-Переносы строк внутри JSON не допускаются.
-
-Схема БД (физическая, из information_schema):
-${schemaText}
-${semanticSection}${examplesSection}
-Пример:
-Вопрос: Продажи по каналам за 2026 год
-Ответ: {"plan":{"from":"sales","select":[{"ref":"channel","alias":"channel"},{"ref":"revenue","alias":"revenue_mln","scale":1000000,"round":1}],"where":[{"ref":"sale_date","op":">=","value":"2026-01-01"},{"ref":"sale_date","op":"<","value":"2027-01-01"}],"order_by":[{"alias":"revenue_mln","dir":"desc"}]},"explanation":"Выручка по каналам продаж за 2026 год, млн рублей с одним знаком."}`;
+export function buildSystemPrompt(schemaText, semanticBlock = '', examplesBlock = '') {
+  const semanticSection = semanticBlock ? `\n${semanticBlock}\n` : '';
+  const examplesSection = examplesBlock ? `\n${examplesBlock}\n` : '';
+  // замена функцией- replacer'ом: $-последовательности в подставляемом тексте
+  // (DDL схемы) не трактуются как групповые ссылки String.replace
+  return loadPromptTemplate()
+    .replace('${schemaText}', () => schemaText)
+    .replace('${semanticSection}', () => semanticSection)
+    .replace('${examplesSection}', () => examplesSection);
 }
 
 function unescapeJsonString(s) {
