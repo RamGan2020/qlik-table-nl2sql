@@ -1,5 +1,6 @@
 // End-to-end тест с реальным LLM: вопрос -> nl_to_sql -> execute_sql.
-// Требует заполненного .env (MOONSHOT_API_KEY). Время работы: до 2 минут.
+// Требует заполненного .env (MOONSHOT_API_KEY). Таймаут LLM — 180 с
+// (env E2E_LLM_TIMEOUT, миллисекунды; под медленные рассуждающие модели).
 
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +47,20 @@ function send(method, params, timeoutMs = 120000) {
 }
 
 const question = process.argv[2] ?? 'Продажи по каналам за 2026 год: число сделок и выручка в млн рублей';
+const LLM_TIMEOUT_MS = Number(process.env.E2E_LLM_TIMEOUT ?? 180000);
+
+// Живой индикатор: показывает фактическое время ожидания, а не фиксированный лимит.
+function waitProgress(label) {
+  const t0 = Date.now();
+  const iv = setInterval(() => {
+    process.stdout.write(`\r${label}... ${Math.floor((Date.now() - t0) / 1000)} с`);
+  }, 1000);
+  return () => {
+    clearInterval(iv);
+    const ms = Date.now() - t0;
+    process.stdout.write(`\r\x1b[2K${label}: ${(ms / 1000).toFixed(1)} с\n`);
+  };
+}
 
 try {
   await send('initialize', {
@@ -55,9 +70,15 @@ try {
   });
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 
-  console.log(`Вопрос: ${question}\nЖдём SQL от модели (до 2 минут)...`);
+  console.log(`Вопрос: ${question}`);
 
-  const nl = await send('tools/call', { name: 'nl_to_sql', arguments: { question } });
+  const stopWaitSql = waitProgress('Ждём SQL от модели');
+  let nl;
+  try {
+    nl = await send('tools/call', { name: 'nl_to_sql', arguments: { question } }, LLM_TIMEOUT_MS);
+  } finally {
+    stopWaitSql();
+  }
   if (nl.result?.isError) {
     console.error('nl_to_sql вернул ошибку:', nl.result.content[0].text);
     process.exitCode = 1;
@@ -66,7 +87,13 @@ try {
     console.log('\nSQL:', sql);
     console.log('Пояснение:', explanation);
 
-    const ex = await send('tools/call', { name: 'execute_sql', arguments: { sql } }, 60000);
+    const stopWaitExec = waitProgress('Выполняем SQL на БД');
+    let ex;
+    try {
+      ex = await send('tools/call', { name: 'execute_sql', arguments: { sql } }, 60000);
+    } finally {
+      stopWaitExec();
+    }
     if (ex.result?.isError) {
       console.error('execute_sql вернул ошибку:', ex.result.content[0].text);
       process.exitCode = 1;
@@ -82,5 +109,12 @@ try {
   console.error('ОШИБКА:', e.message);
   process.exitCode = 1;
 } finally {
-  child.kill();
+  // Детерминированный teardown: на Windows SIGTERM (console control event) может
+  // не дойти до занятого сетевыми вызовами ребёнка — SIGKILL (TerminateProcess)
+  // завершает безусловно; сторож гарантирует выход теста, если handle не закрылся.
+  child.kill('SIGKILL');
+  child.stdin?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  setTimeout(() => process.exit(process.exitCode ?? 0), 1000).unref();
 }
